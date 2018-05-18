@@ -12,7 +12,6 @@ pub use self::error::{EvalError, EvalResult, EvalErrorKind, AssertMessage};
 
 pub use self::value::{PrimVal, PrimValKind, Value, Pointer, ConstValue};
 
-use std::collections::BTreeMap;
 use std::fmt;
 use mir;
 use hir::def_id::DefId;
@@ -21,8 +20,10 @@ use ty::layout::{self, Align, HasDataLayout};
 use middle::region;
 use std::iter;
 use std::io;
+use std::ops::{Deref, DerefMut};
 use syntax::ast::Mutability;
 use rustc_serialize::{Encoder, Decoder, Decodable, Encodable};
+use rustc_data_structures::sorted_map::SortedMap;
 use byteorder::{WriteBytesExt, ReadBytesExt, LittleEndian, BigEndian};
 
 #[derive(Clone, Debug, PartialEq, RustcEncodable, RustcDecodable)]
@@ -244,7 +245,7 @@ pub struct Allocation {
     pub bytes: Vec<u8>,
     /// Maps from byte addresses to allocations.
     /// Only the first byte of a pointer is inserted into the map.
-    pub relocations: BTreeMap<u64, AllocId>,
+    pub relocations: Relocations,
     /// Denotes undefined memory. Reading from undefined memory is forbidden in miri
     pub undef_mask: UndefMask,
     /// The alignment of the allocation to detect unaligned reads.
@@ -261,7 +262,7 @@ impl Allocation {
         undef_mask.grow(slice.len() as u64, true);
         Self {
             bytes: slice.to_owned(),
-            relocations: BTreeMap::new(),
+            relocations: Relocations::new(),
             undef_mask,
             align,
             runtime_mutability: Mutability::Immutable,
@@ -276,7 +277,7 @@ impl Allocation {
         assert_eq!(size as usize as u64, size);
         Allocation {
             bytes: vec![0; size as usize],
-            relocations: BTreeMap::new(),
+            relocations: Relocations::new(),
             undef_mask: UndefMask::new(size),
             align,
             runtime_mutability: Mutability::Immutable,
@@ -285,6 +286,35 @@ impl Allocation {
 }
 
 impl<'tcx> ::serialize::UseSpecializedDecodable for &'tcx Allocation {}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+pub struct Relocations(SortedMap<u64, AllocId>);
+
+impl Relocations {
+    pub fn new() -> Relocations {
+        Relocations(SortedMap::new())
+    }
+
+    // The caller must guarantee that the given relocations are already sorted
+    // by address and contain no duplicates.
+    pub fn from_presorted(r: Vec<(u64, AllocId)>) -> Relocations {
+        Relocations(SortedMap::from_presorted_elements(r))
+    }
+}
+
+impl Deref for Relocations {
+    type Target = SortedMap<u64, AllocId>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Relocations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Methods to access integers in the target endianness

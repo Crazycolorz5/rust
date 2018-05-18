@@ -130,7 +130,7 @@ pub fn const_alloc_to_llvm(cx: &CodegenCx, alloc: &Allocation) -> ValueRef {
     let pointer_size = layout.pointer_size.bytes() as usize;
 
     let mut next_offset = 0;
-    for (&offset, &alloc_id) in &alloc.relocations {
+    for &(offset, alloc_id) in alloc.relocations.iter() {
         assert_eq!(offset as usize as u64, offset);
         let offset = offset as usize;
         if offset > next_offset {
