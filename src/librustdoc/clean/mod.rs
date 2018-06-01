@@ -1091,19 +1091,19 @@ fn resolve(cx: &DocContext, path_str: &str, is_val: bool) -> Result<(Def, Option
                         _ => false,
                     };
                     let elem = if is_enum {
-                        cx.tcx.adt_def(did).all_fields().find(|item| item.name == item_name)
+                        cx.tcx.adt_def(did).all_fields().find(|item| item.ident.name == item_name)
                     } else {
                         cx.tcx.adt_def(did)
                               .non_enum_variant()
                               .fields
                               .iter()
-                              .find(|item| item.name == item_name)
+                              .find(|item| item.ident.name == item_name)
                     };
                     if let Some(item) = elem {
                         Ok((ty.def,
                             Some(format!("{}.{}",
                                          if is_enum { "variant" } else { "structfield" },
-                                         item.name))))
+                                         item.ident))))
                     } else {
                         Err(())
                     }
@@ -1340,7 +1340,7 @@ impl<'tcx> Clean<TyParam> for ty::GenericParamDef {
     fn clean(&self, cx: &DocContext) -> TyParam {
         cx.renderinfo.borrow_mut().external_typarams.insert(self.def_id, self.name.clean(cx));
         let has_default = match self.kind {
-            ty::GenericParamDefKind::Type(ty) => ty.has_default,
+            ty::GenericParamDefKind::Type { has_default, .. } => has_default,
             _ => panic!("tried to convert a non-type GenericParamDef as a type")
         };
         TyParam {
@@ -1827,7 +1827,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics,
         // predicates field (see rustc_typeck::collect::ty_generics), so remove
         // them.
         let stripped_typarams = gens.params.iter().filter_map(|param| {
-            if let ty::GenericParamDefKind::Type(_) = param.kind {
+            if let ty::GenericParamDefKind::Type {..} = param.kind {
                 if param.name == keywords::SelfType.name().as_str() {
                     assert_eq!(param.index, 0);
                     None
@@ -2669,19 +2669,19 @@ impl Clean<Type> for hir::Ty {
                              type_: box m.ty.clean(cx)}
             }
             TySlice(ref ty) => Slice(box ty.clean(cx)),
-            TyArray(ref ty, n) => {
-                let def_id = cx.tcx.hir.body_owner_def_id(n);
+            TyArray(ref ty, ref length) => {
+                let def_id = cx.tcx.hir.local_def_id(length.id);
                 let param_env = cx.tcx.param_env(def_id);
                 let substs = Substs::identity_for_item(cx.tcx, def_id);
                 let cid = GlobalId {
                     instance: ty::Instance::new(def_id, substs),
                     promoted: None
                 };
-                let n = cx.tcx.const_eval(param_env.and(cid)).unwrap_or_else(|_| {
+                let length = cx.tcx.const_eval(param_env.and(cid)).unwrap_or_else(|_| {
                     ty::Const::unevaluated(cx.tcx, def_id, substs, cx.tcx.types.usize)
                 });
-                let n = print_const(cx, n);
-                Array(box ty.clean(cx), n)
+                let length = print_const(cx, length);
+                Array(box ty.clean(cx), length)
             },
             TyTup(ref tys) => Tuple(tys.clean(cx)),
             TyPath(hir::QPath::Resolved(None, ref path)) => {
@@ -2990,7 +2990,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
 impl Clean<Item> for hir::StructField {
     fn clean(&self, cx: &DocContext) -> Item {
         Item {
-            name: Some(self.name).clean(cx),
+            name: Some(self.ident.name).clean(cx),
             attrs: self.attrs.clean(cx),
             source: self.span.clean(cx),
             visibility: self.vis.clean(cx),
@@ -3005,7 +3005,7 @@ impl Clean<Item> for hir::StructField {
 impl<'tcx> Clean<Item> for ty::FieldDef {
     fn clean(&self, cx: &DocContext) -> Item {
         Item {
-            name: Some(self.name).clean(cx),
+            name: Some(self.ident.name).clean(cx),
             attrs: cx.tcx.get_attrs(self.did).clean(cx),
             source: cx.tcx.def_span(self.did).clean(cx),
             visibility: self.vis.clean(cx),
@@ -3201,7 +3201,7 @@ impl<'tcx> Clean<Item> for ty::VariantDef {
                     fields: self.fields.iter().map(|field| {
                         Item {
                             source: cx.tcx.def_span(field.did).clean(cx),
-                            name: Some(field.name.clean(cx)),
+                            name: Some(field.ident.name.clean(cx)),
                             attrs: cx.tcx.get_attrs(field.did).clean(cx),
                             visibility: field.vis.clean(cx),
                             def_id: field.did,
@@ -3850,7 +3850,7 @@ fn name_from_pat(p: &hir::Pat) -> String {
         PatKind::Struct(ref name, ref fields, etc) => {
             format!("{} {{ {}{} }}", qpath_to_string(name),
                 fields.iter().map(|&Spanned { node: ref fp, .. }|
-                                  format!("{}: {}", fp.name, name_from_pat(&*fp.pat)))
+                                  format!("{}: {}", fp.ident, name_from_pat(&*fp.pat)))
                              .collect::<Vec<String>>().join(", "),
                 if etc { ", ..." } else { "" }
             )

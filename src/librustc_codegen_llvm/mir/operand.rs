@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use llvm::ValueRef;
+use llvm::{ValueRef, LLVMConstInBoundsGEP};
 use rustc::middle::const_val::ConstEvalErr;
 use rustc::mir;
 use rustc::mir::interpret::ConstValue;
@@ -28,7 +28,7 @@ use std::fmt;
 use std::ptr;
 
 use super::{FunctionCx, LocalRef};
-use super::constant::{primval_to_llvm, const_alloc_to_llvm};
+use super::constant::{scalar_to_llvm, const_alloc_to_llvm};
 use super::place::PlaceRef;
 
 /// The representation of a Rust value. The enum variant is in fact
@@ -105,12 +105,12 @@ impl<'a, 'tcx> OperandRef<'tcx> {
         }
 
         let val = match val {
-            ConstValue::ByVal(x) => {
+            ConstValue::Scalar(x) => {
                 let scalar = match layout.abi {
                     layout::Abi::Scalar(ref x) => x,
                     _ => bug!("from_const: invalid ByVal layout: {:#?}", layout)
                 };
-                let llval = primval_to_llvm(
+                let llval = scalar_to_llvm(
                     bx.cx,
                     x,
                     scalar,
@@ -118,18 +118,18 @@ impl<'a, 'tcx> OperandRef<'tcx> {
                 );
                 OperandValue::Immediate(llval)
             },
-            ConstValue::ByValPair(a, b) => {
+            ConstValue::ScalarPair(a, b) => {
                 let (a_scalar, b_scalar) = match layout.abi {
                     layout::Abi::ScalarPair(ref a, ref b) => (a, b),
-                    _ => bug!("from_const: invalid ByValPair layout: {:#?}", layout)
+                    _ => bug!("from_const: invalid ScalarPair layout: {:#?}", layout)
                 };
-                let a_llval = primval_to_llvm(
+                let a_llval = scalar_to_llvm(
                     bx.cx,
                     a,
                     a_scalar,
                     layout.scalar_pair_element_llvm_type(bx.cx, 0),
                 );
-                let b_llval = primval_to_llvm(
+                let b_llval = scalar_to_llvm(
                     bx.cx,
                     b,
                     b_scalar,
@@ -137,9 +137,15 @@ impl<'a, 'tcx> OperandRef<'tcx> {
                 );
                 OperandValue::Pair(a_llval, b_llval)
             },
-            ConstValue::ByRef(alloc) => {
+            ConstValue::ByRef(alloc, offset) => {
                 let init = const_alloc_to_llvm(bx.cx, alloc);
-                let llval = consts::addr_of(bx.cx, init, layout.align, "byte_str");
+                let base_addr = consts::addr_of(bx.cx, init, layout.align, "byte_str");
+
+                let llval = unsafe { LLVMConstInBoundsGEP(
+                    consts::bitcast(base_addr, Type::i8p(bx.cx)),
+                    &C_usize(bx.cx, offset.bytes()),
+                    1,
+                )};
                 let llval = consts::bitcast(llval, layout.llvm_type(bx.cx).ptr_to());
                 return Ok(PlaceRef::new_sized(llval, layout, alloc.align).load(bx));
             },
@@ -407,10 +413,10 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
                     .unwrap_or_else(|err| {
                         match constant.literal {
                             mir::Literal::Promoted { .. } => {
-                                // don't report errors inside promoteds, just warnings.
+                                // FIXME: generate a panic here
                             },
                             mir::Literal::Value { .. } => {
-                                err.report(bx.tcx(), constant.span, "const operand")
+                                err.report(bx.tcx(), constant.span, "const operand");
                             },
                         }
                         // We've errored, so we don't have to produce working code.

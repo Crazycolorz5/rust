@@ -608,9 +608,9 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
     fn walk_local(&mut self, local: &hir::Local) {
         match local.init {
             None => {
-                let delegate = &mut self.delegate;
-                local.pat.each_binding(|_, id, span, _| {
-                    delegate.decl_without_init(id, span);
+                local.pat.each_binding(|_, hir_id, span, _| {
+                    let node_id = self.mc.tcx.hir.hir_to_node_id(hir_id);
+                    self.delegate.decl_without_init(node_id, span);
                 })
             }
 
@@ -669,7 +669,7 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                             &*with_expr,
                             with_cmt.clone(),
                             f_index,
-                            with_field.name,
+                            with_field.ident,
                             with_field.ty(self.tcx(), substs)
                         );
                         self.delegate_consume(with_expr.id, with_expr.span, &cmt_field);
@@ -837,17 +837,24 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
     /// established up front, e.g. via `determine_pat_move_mode` (see
     /// also `walk_irrefutable_pat` for patterns that stand alone).
     fn walk_pat(&mut self, cmt_discr: mc::cmt<'tcx>, pat: &hir::Pat, match_mode: MatchMode) {
-        debug!("walk_pat cmt_discr={:?} pat={:?}", cmt_discr, pat);
+        debug!("walk_pat(cmt_discr={:?}, pat={:?})", cmt_discr, pat);
 
         let ExprUseVisitor { ref mc, ref mut delegate, param_env } = *self;
         return_if_err!(mc.cat_pattern(cmt_discr.clone(), pat, |cmt_pat, pat| {
             if let PatKind::Binding(_, canonical_id, ..) = pat.node {
-                debug!("binding cmt_pat={:?} pat={:?} match_mode={:?}", cmt_pat, pat, match_mode);
+                debug!(
+                    "walk_pat: binding cmt_pat={:?} pat={:?} match_mode={:?}",
+                    cmt_pat,
+                    pat,
+                    match_mode,
+                );
                 let bm = *mc.tables.pat_binding_modes().get(pat.hir_id)
                                                      .expect("missing binding mode");
+                debug!("walk_pat: pat.hir_id={:?} bm={:?}", pat.hir_id, bm);
 
                 // pat_ty: the type of the binding being produced.
                 let pat_ty = return_if_err!(mc.node_ty(pat.hir_id));
+                debug!("walk_pat: pat_ty={:?}", pat_ty);
 
                 // Each match binding is effectively an assignment to the
                 // binding being produced.

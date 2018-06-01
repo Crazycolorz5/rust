@@ -835,7 +835,9 @@ pub unsafe fn transmute_copy<T, U>(src: &T) -> U {
 
 /// Opaque type representing the discriminant of an enum.
 ///
-/// See the `discriminant` function in this module for more information.
+/// See the [`discriminant`] function in this module for more information.
+///
+/// [`discriminant`]: fn.discriminant.html
 #[stable(feature = "discriminant_value", since = "1.21.0")]
 pub struct Discriminant<T>(u64, PhantomData<fn() -> T>);
 
@@ -1164,6 +1166,14 @@ impl<'a, T: ?Sized> PinMut<'a, T> {
     {
         PinMut { inner: f(this.inner) }
     }
+
+    /// Assign a new value to the memory behind the pinned reference.
+    #[unstable(feature = "pin", issue = "49150")]
+    pub fn set(this: PinMut<'a, T>, value: T)
+        where T: Sized,
+    {
+        *this.inner = value;
+    }
 }
 
 #[unstable(feature = "pin", issue = "49150")]
@@ -1207,4 +1217,4 @@ impl<'a, T: ?Sized> fmt::Pointer for PinMut<'a, T> {
 impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<PinMut<'a, U>> for PinMut<'a, T> {}
 
 #[unstable(feature = "pin", issue = "49150")]
-unsafe impl<'a, T: ?Sized> Unpin for PinMut<'a, T> {}
+impl<'a, T: ?Sized> Unpin for PinMut<'a, T> {}

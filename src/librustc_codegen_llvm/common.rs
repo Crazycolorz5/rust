@@ -425,14 +425,16 @@ pub fn ty_fn_sig<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
             let tcx = cx.tcx;
             let sig = substs.poly_sig(def_id, cx.tcx);
 
-            let env_region = ty::ReLateBound(ty::DebruijnIndex::new(1), ty::BrEnv);
+            let env_region = ty::ReLateBound(ty::DebruijnIndex::INNERMOST, ty::BrEnv);
             let env_ty = tcx.mk_mut_ref(tcx.mk_region(env_region), ty);
 
             sig.map_bound(|sig| {
                 let state_did = tcx.lang_items().gen_state().unwrap();
                 let state_adt_ref = tcx.adt_def(state_did);
-                let state_substs = tcx.mk_substs([sig.yield_ty.into(),
-                    sig.return_ty.into()].iter());
+                let state_substs = tcx.intern_substs(&[
+                    sig.yield_ty.into(),
+                    sig.return_ty.into(),
+                ]);
                 let ret_ty = tcx.mk_adt(state_adt_ref, state_substs);
 
                 tcx.mk_fn_sig(iter::once(env_ty),

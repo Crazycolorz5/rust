@@ -837,7 +837,7 @@ impl<T> Vec<T> {
 
         // space for the new element
         if len == self.buf.cap() {
-            self.buf.double();
+            self.reserve(1);
         }
 
         unsafe {
@@ -1057,7 +1057,7 @@ impl<T> Vec<T> {
         // This will panic or abort if we would allocate > isize::MAX bytes
         // or if the length increment would overflow for zero-sized types.
         if self.len == self.buf.cap() {
-            self.buf.double();
+            self.reserve(1);
         }
         unsafe {
             let end = self.as_mut_ptr().offset(self.len as isize);
@@ -1166,12 +1166,12 @@ impl<T> Vec<T> {
         // the hole, and the vector length is restored to the new length.
         //
         let len = self.len();
-        let start = match range.start() {
+        let start = match range.start_bound() {
             Included(&n) => n,
             Excluded(&n) => n + 1,
             Unbounded    => 0,
         };
-        let end = match range.end() {
+        let end = match range.end_bound() {
             Included(&n) => n + 1,
             Excluded(&n) => n,
             Unbounded    => len,

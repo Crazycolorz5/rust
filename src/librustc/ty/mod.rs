@@ -36,10 +36,11 @@ use ty::util::{IntTypeExt, Discr};
 use ty::walk::TypeWalker;
 use util::captures::Captures;
 use util::nodemap::{NodeSet, DefIdMap, FxHashMap};
+use arena::SyncDroplessArena;
 
 use serialize::{self, Encodable, Encoder};
 use std::cell::RefCell;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -78,7 +79,7 @@ pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
 
 pub use self::context::{TyCtxt, GlobalArenas, AllArenas, tls, keep_local};
-pub use self::context::{Lift, TypeckTables, InterpretInterner};
+pub use self::context::{Lift, TypeckTables};
 
 pub use self::instance::{Instance, InstanceDef};
 
@@ -487,8 +488,36 @@ pub struct TyS<'tcx> {
     pub sty: TypeVariants<'tcx>,
     pub flags: TypeFlags,
 
-    // the maximal depth of any bound regions appearing in this type.
-    region_depth: u32,
+    /// This is a kind of confusing thing: it stores the smallest
+    /// binder such that
+    ///
+    /// (a) the binder itself captures nothing but
+    /// (b) all the late-bound things within the type are captured
+    ///     by some sub-binder.
+    ///
+    /// So, for a type without any late-bound things, like `u32`, this
+    /// will be INNERMOST, because that is the innermost binder that
+    /// captures nothing. But for a type `&'D u32`, where `'D` is a
+    /// late-bound region with debruijn index D, this would be D+1 --
+    /// the binder itself does not capture D, but D is captured by an
+    /// inner binder.
+    ///
+    /// We call this concept an "exclusive" binder D (because all
+    /// debruijn indices within the type are contained within `0..D`
+    /// (exclusive)).
+    outer_exclusive_binder: ty::DebruijnIndex,
+}
+
+impl<'tcx> Ord for TyS<'tcx> {
+    fn cmp(&self, other: &TyS<'tcx>) -> Ordering {
+        self.sty.cmp(&other.sty)
+    }
+}
+
+impl<'tcx> PartialOrd for TyS<'tcx> {
+    fn partial_cmp(&self, other: &TyS<'tcx>) -> Option<Ordering> {
+        Some(self.sty.cmp(&other.sty))
+    }
 }
 
 impl<'tcx> PartialEq for TyS<'tcx> {
@@ -547,7 +576,8 @@ impl<'a, 'gcx> HashStable<StableHashingContext<'a>> for ty::TyS<'gcx> {
             // The other fields just provide fast access to information that is
             // also contained in `sty`, so no need to hash them.
             flags: _,
-            region_depth: _,
+
+            outer_exclusive_binder: _,
         } = *self;
 
         sty.hash_stable(hcx, hasher);
@@ -570,38 +600,113 @@ impl <'gcx: 'tcx, 'tcx> Canonicalize<'gcx, 'tcx> for Ty<'tcx> {
     }
 }
 
+extern {
+    /// A dummy type used to force Slice to by unsized without requiring fat pointers
+    type OpaqueSliceContents;
+}
+
 /// A wrapper for slices with the additional invariant
 /// that the slice is interned and no other slice with
 /// the same contents can exist in the same context.
-/// This means we can use pointer + length for both
+/// This means we can use pointer for both
 /// equality comparisons and hashing.
-#[derive(Debug, RustcEncodable)]
-pub struct Slice<T>([T]);
+#[repr(C)]
+pub struct Slice<T> {
+    len: usize,
+    data: [T; 0],
+    opaque: OpaqueSliceContents,
+}
 
-impl<T> PartialEq for Slice<T> {
+impl<T: Copy> Slice<T> {
     #[inline]
-    fn eq(&self, other: &Slice<T>) -> bool {
-        (&self.0 as *const [T]) == (&other.0 as *const [T])
+    fn from_arena<'tcx>(arena: &'tcx SyncDroplessArena, slice: &[T]) -> &'tcx Slice<T> {
+        assert!(!mem::needs_drop::<T>());
+        assert!(mem::size_of::<T>() != 0);
+        assert!(slice.len() != 0);
+
+        // Align up the size of the len (usize) field
+        let align = mem::align_of::<T>();
+        let align_mask = align - 1;
+        let offset = mem::size_of::<usize>();
+        let offset = (offset + align_mask) & !align_mask;
+
+        let size = offset + slice.len() * mem::size_of::<T>();
+
+        let mem = arena.alloc_raw(
+            size,
+            cmp::max(mem::align_of::<T>(), mem::align_of::<usize>()));
+        unsafe {
+            let result = &mut *(mem.as_mut_ptr() as *mut Slice<T>);
+            // Write the length
+            result.len = slice.len();
+
+            // Write the elements
+            let arena_slice = slice::from_raw_parts_mut(result.data.as_mut_ptr(), result.len);
+            arena_slice.copy_from_slice(slice);
+
+            result
+        }
     }
 }
-impl<T> Eq for Slice<T> {}
+
+impl<T: fmt::Debug> fmt::Debug for Slice<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl<T: Encodable> Encodable for Slice<T> {
+    #[inline]
+    fn encode<S: Encoder>(&self, s: &mut S) -> Result<(), S::Error> {
+        (**self).encode(s)
+    }
+}
+
+impl<T> Ord for Slice<T> where T: Ord {
+    fn cmp(&self, other: &Slice<T>) -> Ordering {
+        if self == other { Ordering::Equal } else {
+            <[T] as Ord>::cmp(&**self, &**other)
+        }
+    }
+}
+
+impl<T> PartialOrd for Slice<T> where T: PartialOrd {
+    fn partial_cmp(&self, other: &Slice<T>) -> Option<Ordering> {
+        if self == other { Some(Ordering::Equal) } else {
+            <[T] as PartialOrd>::partial_cmp(&**self, &**other)
+        }
+    }
+}
+
+impl<T: PartialEq> PartialEq for Slice<T> {
+    #[inline]
+    fn eq(&self, other: &Slice<T>) -> bool {
+        (self as *const _) == (other as *const _)
+    }
+}
+impl<T: Eq> Eq for Slice<T> {}
 
 impl<T> Hash for Slice<T> {
+    #[inline]
     fn hash<H: Hasher>(&self, s: &mut H) {
-        (self.as_ptr(), self.len()).hash(s)
+        (self as *const Slice<T>).hash(s)
     }
 }
 
 impl<T> Deref for Slice<T> {
     type Target = [T];
+    #[inline(always)]
     fn deref(&self) -> &[T] {
-        &self.0
+        unsafe {
+            slice::from_raw_parts(self.data.as_ptr(), self.len)
+        }
     }
 }
 
 impl<'a, T> IntoIterator for &'a Slice<T> {
     type Item = &'a T;
     type IntoIter = <&'a [T] as IntoIterator>::IntoIter;
+    #[inline(always)]
     fn into_iter(self) -> Self::IntoIter {
         self[..].iter()
     }
@@ -610,9 +715,14 @@ impl<'a, T> IntoIterator for &'a Slice<T> {
 impl<'tcx> serialize::UseSpecializedDecodable for &'tcx Slice<Ty<'tcx>> {}
 
 impl<T> Slice<T> {
+    #[inline(always)]
     pub fn empty<'a>() -> &'a Slice<T> {
+        #[repr(align(64), C)]
+        struct EmptySlice([u8; 64]);
+        static EMPTY_SLICE: EmptySlice = EmptySlice([0; 64]);
+        assert!(mem::align_of::<T>() <= 64);
         unsafe {
-            mem::transmute(slice::from_raw_parts(0x1 as *const T, 0))
+            &*(&EMPTY_SLICE as *const _ as *const Slice<T>)
         }
     }
 }
@@ -714,13 +824,6 @@ pub enum IntVarValue {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FloatVarValue(pub ast::FloatTy);
 
-#[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable)]
-pub struct TypeParamDef {
-    pub has_default: bool,
-    pub object_lifetime_default: ObjectLifetimeDefault,
-    pub synthetic: Option<hir::SyntheticTyParamKind>,
-}
-
 impl ty::EarlyBoundRegion {
     pub fn to_bound_region(&self) -> ty::BoundRegion {
         ty::BoundRegion::BrNamed(self.def_id, self.name)
@@ -730,7 +833,11 @@ impl ty::EarlyBoundRegion {
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
 pub enum GenericParamDefKind {
     Lifetime,
-    Type(TypeParamDef),
+    Type {
+        has_default: bool,
+        object_lifetime_default: ObjectLifetimeDefault,
+        synthetic: Option<hir::SyntheticTyParamKind>,
+    }
 }
 
 #[derive(Clone, RustcEncodable, RustcDecodable)]
@@ -811,7 +918,7 @@ impl<'a, 'gcx, 'tcx> Generics {
         for param in &self.params {
             match param.kind {
                 GenericParamDefKind::Lifetime => own_counts.lifetimes += 1,
-                GenericParamDefKind::Type(_) => own_counts.types += 1,
+                GenericParamDefKind::Type {..} => own_counts.types += 1,
             };
         }
 
@@ -821,7 +928,7 @@ impl<'a, 'gcx, 'tcx> Generics {
     pub fn requires_monomorphization(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>) -> bool {
         for param in &self.params {
             match param.kind {
-                GenericParamDefKind::Type(_) => return true,
+                GenericParamDefKind::Type {..} => return true,
                 GenericParamDefKind::Lifetime => {}
             }
         }
@@ -850,7 +957,7 @@ impl<'a, 'gcx, 'tcx> Generics {
         }
     }
 
-    /// Returns the `TypeParamDef` associated with this `ParamTy`.
+    /// Returns the `GenericParamDef` associated with this `ParamTy`.
     pub fn type_param(&'tcx self,
                       param: &ParamTy,
                       tcx: TyCtxt<'a, 'gcx, 'tcx>)
@@ -858,7 +965,7 @@ impl<'a, 'gcx, 'tcx> Generics {
         if let Some(index) = param.idx.checked_sub(self.parent_count as u32) {
             let param = &self.params[index as usize];
             match param.kind {
-                ty::GenericParamDefKind::Type(_) => param,
+                ty::GenericParamDefKind::Type {..} => param,
                 _ => bug!("expected type parameter, but found another generic parameter")
             }
         } else {
@@ -1107,7 +1214,7 @@ impl<'tcx> PolyTraitPredicate<'tcx> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct OutlivesPredicate<A,B>(pub A, pub B); // `A : B`
 pub type PolyOutlivesPredicate<A,B> = ty::Binder<OutlivesPredicate<A,B>>;
 pub type RegionOutlivesPredicate<'tcx> = OutlivesPredicate<ty::Region<'tcx>,
@@ -1594,7 +1701,7 @@ pub enum VariantDiscr {
 #[derive(Debug)]
 pub struct FieldDef {
     pub did: DefId,
-    pub name: Name,
+    pub ident: Ident,
     pub vis: Visibility,
 }
 
@@ -1607,6 +1714,20 @@ pub struct AdtDef {
     pub variants: Vec<VariantDef>,
     flags: AdtFlags,
     pub repr: ReprOptions,
+}
+
+impl PartialOrd for AdtDef {
+    fn partial_cmp(&self, other: &AdtDef) -> Option<Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+/// There should be only one AdtDef for each `did`, therefore
+/// it is fine to implement `Ord` only based on `did`.
+impl Ord for AdtDef {
+    fn cmp(&self, other: &AdtDef) -> Ordering {
+        self.did.cmp(&other.did)
+    }
 }
 
 impl PartialEq for AdtDef {
@@ -1943,7 +2064,7 @@ impl<'a, 'gcx, 'tcx> AdtDef {
         match tcx.const_eval(param_env.and(cid)) {
             Ok(val) => {
                 // FIXME: Find the right type and use it instead of `val.ty` here
-                if let Some(b) = val.assert_bits(val.ty) {
+                if let Some(b) = val.assert_bits(tcx.global_tcx(), param_env.and(val.ty)) {
                     trace!("discriminants: {} ({:?})", b, repr_type);
                     Some(Discr {
                         val: b,
@@ -2415,7 +2536,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
     pub fn find_field_index(self, ident: Ident, variant: &VariantDef) -> Option<usize> {
         variant.fields.iter().position(|field| {
-            self.adjust_ident(ident.modern(), variant.did, DUMMY_NODE_ID).0 == field.name.to_ident()
+            self.adjust_ident(ident, variant.did, DUMMY_NODE_ID).0 == field.ident.modern()
         })
     }
 
@@ -2596,11 +2717,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     // supposed definition name (`def_name`). The method also needs `DefId` of the supposed
     // definition's parent/scope to perform comparison.
     pub fn hygienic_eq(self, use_name: Name, def_name: Name, def_parent_def_id: DefId) -> bool {
-        self.adjust(use_name, def_parent_def_id, DUMMY_NODE_ID).0 == def_name.to_ident()
-    }
-
-    pub fn adjust(self, name: Name, scope: DefId, block: NodeId) -> (Ident, DefId) {
-        self.adjust_ident(name.to_ident(), scope, block)
+        let (use_ident, def_ident) = (use_name.to_ident(), def_name.to_ident());
+        self.adjust_ident(use_ident, def_parent_def_id, DUMMY_NODE_ID).0 == def_ident
     }
 
     pub fn adjust_ident(self, mut ident: Ident, scope: DefId, block: NodeId) -> (Ident, DefId) {
@@ -2608,6 +2726,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             LOCAL_CRATE => self.hir.definitions().expansion(scope.index),
             _ => Mark::root(),
         };
+        ident = ident.modern();
         let scope = match ident.span.adjust(expansion) {
             Some(macro_def) => self.hir.definitions().macro_def_scope(macro_def),
             None if block == DUMMY_NODE_ID => DefId::local(CRATE_DEF_INDEX), // Dummy DefId
@@ -2678,11 +2797,11 @@ fn adt_sized_constraint<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                   -> &'tcx [Ty<'tcx>] {
     let def = tcx.adt_def(def_id);
 
-    let result = tcx.intern_type_list(&def.variants.iter().flat_map(|v| {
+    let result = tcx.mk_type_list(def.variants.iter().flat_map(|v| {
         v.fields.last()
     }).flat_map(|f| {
         def.sized_constraint_for_ty(tcx, tcx.type_of(f.did))
-    }).collect::<Vec<_>>());
+    }));
 
     debug!("adt_sized_constraint: {:?} => {:?}", def, result);
 

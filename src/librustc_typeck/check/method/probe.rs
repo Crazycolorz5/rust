@@ -422,7 +422,8 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
     {
         let is_accessible = if let Some(name) = self.method_name {
             let item = candidate.item;
-            let def_scope = self.tcx.adjust(name, item.container.id(), self.body_id).1;
+            let def_scope =
+                self.tcx.adjust_ident(name.to_ident(), item.container.id(), self.body_id).1;
             item.vis.is_accessible_from(def_scope, self.tcx)
         } else {
             true
@@ -1057,7 +1058,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         unstable_candidates: &[(&Candidate<'tcx>, Symbol)],
     ) {
         let mut diag = self.tcx.struct_span_lint_node(
-            lint::builtin::UNSTABLE_NAME_COLLISION,
+            lint::builtin::UNSTABLE_NAME_COLLISIONS,
             self.fcx.body_id,
             self.span,
             "a method with this name may be added to the standard library in the future",
@@ -1399,7 +1400,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                             // `impl_self_ty()` for an explanation.
                             self.tcx.types.re_erased.into()
                         }
-                        GenericParamDefKind::Type(_) => self.var_for_def(self.span, param),
+                        GenericParamDefKind::Type {..} => self.var_for_def(self.span, param),
                     }
                 }
             });
@@ -1416,7 +1417,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         Substs::for_item(self.tcx, def_id, |param, _| {
             match param.kind {
                 GenericParamDefKind::Lifetime => self.tcx.types.re_erased.into(),
-                GenericParamDefKind::Type(_) => {
+                GenericParamDefKind::Type {..} => {
                     self.next_ty_var(TypeVariableOrigin::SubstitutionPlaceholder(
                         self.tcx.def_span(def_id))).into()
                 }

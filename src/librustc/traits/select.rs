@@ -37,7 +37,7 @@ use dep_graph::{DepNodeIndex, DepKind};
 use hir::def_id::DefId;
 use infer;
 use infer::{InferCtxt, InferOk, TypeFreshener};
-use ty::subst::{Kind, Subst, Substs};
+use ty::subst::{Subst, Substs};
 use ty::{self, ToPredicate, ToPolyTraitRef, Ty, TyCtxt, TypeFoldable};
 use ty::fast_reject;
 use ty::relate::TypeRelation;
@@ -3019,7 +3019,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                 // with a potentially unsized trailing field.
                 let params = substs_a.iter().enumerate().map(|(i, &k)| {
                     if ty_params.contains(i) {
-                        Kind::from(tcx.types.err)
+                        tcx.types.err.into()
                     } else {
                         k
                     }
@@ -3058,7 +3058,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                     obligation.predicate.def_id(),
                     obligation.recursion_depth + 1,
                     inner_source,
-                    &[inner_target]));
+                    &[inner_target.into()]));
             }
 
             // (.., T) -> (.., U).
@@ -3066,16 +3066,16 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                 assert_eq!(tys_a.len(), tys_b.len());
 
                 // The last field of the tuple has to exist.
-                let (a_last, a_mid) = if let Some(x) = tys_a.split_last() {
+                let (&a_last, a_mid) = if let Some(x) = tys_a.split_last() {
                     x
                 } else {
                     return Err(Unimplemented);
                 };
-                let b_last = tys_b.last().unwrap();
+                let &b_last = tys_b.last().unwrap();
 
                 // Check that the source tuple with the target's
                 // last element is equal to the target.
-                let new_tuple = tcx.mk_tup(a_mid.iter().chain(Some(b_last)));
+                let new_tuple = tcx.mk_tup(a_mid.iter().cloned().chain(iter::once(b_last)));
                 let InferOk { obligations, .. } =
                     self.infcx.at(&obligation.cause, obligation.param_env)
                               .eq(target, new_tuple)
@@ -3089,7 +3089,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                     obligation.predicate.def_id(),
                     obligation.recursion_depth + 1,
                     a_last,
-                    &[b_last]));
+                    &[b_last.into()]));
             }
 
             _ => bug!()
@@ -3356,13 +3356,28 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                     predicate: predicate.value
                 }))
         }).collect();
+
         // We are performing deduplication here to avoid exponential blowups
         // (#38528) from happening, but the real cause of the duplication is
         // unknown. What we know is that the deduplication avoids exponential
-        // amount of predicates being propogated when processing deeply nested
+        // amount of predicates being propagated when processing deeply nested
         // types.
-        let mut seen = FxHashSet();
-        predicates.retain(|i| seen.insert(i.clone()));
+        //
+        // This code is hot enough that it's worth avoiding the allocation
+        // required for the FxHashSet when possible. Special-casing lengths 0,
+        // 1 and 2 covers roughly 75--80% of the cases.
+        if predicates.len() <= 1 {
+            // No possibility of duplicates.
+        } else if predicates.len() == 2 {
+            // Only two elements. Drop the second if they are equal.
+            if predicates[0] == predicates[1] {
+                predicates.truncate(1);
+            }
+        } else {
+            // Three or more elements. Use a general deduplication process.
+            let mut seen = FxHashSet();
+            predicates.retain(|i| seen.insert(i.clone()));
+        }
         self.infcx().plug_leaks(skol_map, snapshot, predicates)
     }
 }

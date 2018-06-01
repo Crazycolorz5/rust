@@ -54,6 +54,7 @@
 #![feature(macro_vis_matcher)]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
+#![feature(extern_types)]
 #![feature(non_exhaustive)]
 #![feature(proc_macro_internals)]
 #![feature(quote)]
@@ -67,7 +68,11 @@
 #![feature(trace_macros)]
 #![feature(trusted_len)]
 #![feature(catch_expr)]
+#![feature(integer_atomics)]
 #![feature(test)]
+#![feature(in_band_lifetimes)]
+#![feature(macro_at_most_once_rep)]
+#![feature(inclusive_range_methods)]
 
 #![recursion_limit="512"]
 
@@ -80,6 +85,7 @@ extern crate graphviz;
 #[macro_use] extern crate lazy_static;
 #[cfg(windows)]
 extern crate libc;
+extern crate polonius_engine;
 extern crate rustc_target;
 #[macro_use] extern crate rustc_data_structures;
 extern crate serialize;
@@ -89,6 +95,7 @@ extern crate rustc_errors as errors;
 extern crate syntax_pos;
 extern crate jobserver;
 extern crate proc_macro;
+extern crate chalk_engine;
 
 extern crate serialize as rustc_serialize; // used by deriving
 

@@ -43,6 +43,7 @@ use std::collections::HashSet;
 
 use syntax::ast;
 use syntax::attr;
+use syntax::edition::Edition;
 use syntax::feature_gate::{AttributeGate, AttributeType, Stability, deprecated_attributes};
 use syntax_pos::{BytePos, Span, SyntaxContext};
 use syntax::symbol::keywords;
@@ -616,7 +617,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDebugImplementations {
 declare_lint! {
     pub ANONYMOUS_PARAMETERS,
     Allow,
-    "detects anonymous parameters"
+    "detects anonymous parameters",
+    Edition::Edition2018 => Warn,
 }
 
 /// Checks for use of anonymous parameters (RFC 1685)
@@ -637,9 +639,29 @@ impl EarlyLintPass for AnonymousParameters {
                     match arg.pat.node {
                         ast::PatKind::Ident(_, ident, None) => {
                             if ident.name == keywords::Invalid.name() {
-                                cx.span_lint(ANONYMOUS_PARAMETERS,
-                                             arg.pat.span,
-                                             "use of deprecated anonymous parameter");
+                                let ty_snip = cx
+                                    .sess
+                                    .codemap()
+                                    .span_to_snippet(arg.ty.span);
+
+                                let (ty_snip, appl) = if let Ok(snip) = ty_snip {
+                                    (snip, Applicability::MachineApplicable)
+                                } else {
+                                    ("<type>".to_owned(), Applicability::HasPlaceholders)
+                                };
+
+                                cx.struct_span_lint(
+                                    ANONYMOUS_PARAMETERS,
+                                    arg.pat.span,
+                                    "anonymous parameters are deprecated and will be \
+                                     removed in the next edition."
+                                ).span_suggestion_with_applicability(
+                                    arg.pat.span,
+                                    "Try naming the parameter or explicitly \
+                                    ignoring it",
+                                    format!("_: {}", ty_snip),
+                                    appl
+                                ).emit();
                             }
                         }
                         _ => (),
@@ -694,7 +716,7 @@ impl EarlyLintPass for DeprecatedAttr {
 }
 
 declare_lint! {
-    pub UNUSED_DOC_COMMENT,
+    pub UNUSED_DOC_COMMENTS,
     Warn,
     "detects doc comments that aren't used by rustdoc"
 }
@@ -704,7 +726,7 @@ pub struct UnusedDocComment;
 
 impl LintPass for UnusedDocComment {
     fn get_lints(&self) -> LintArray {
-        lint_array![UNUSED_DOC_COMMENT]
+        lint_array![UNUSED_DOC_COMMENTS]
     }
 }
 
@@ -713,7 +735,7 @@ impl UnusedDocComment {
                    I: Iterator<Item=&'a ast::Attribute>,
                    C: LintContext<'tcx>>(&self, mut attrs: I, cx: &C) {
         if let Some(attr) = attrs.find(|a| a.is_value_str() && a.check_name("doc")) {
-            cx.struct_span_lint(UNUSED_DOC_COMMENT, attr.span, "doc comment not used by rustdoc")
+            cx.struct_span_lint(UNUSED_DOC_COMMENTS, attr.span, "doc comment not used by rustdoc")
               .emit();
         }
     }
@@ -1527,7 +1549,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnusedBrokenConst {
 }
 
 declare_lint! {
-    pub UNNECESSARY_EXTERN_CRATE,
+    pub UNNECESSARY_EXTERN_CRATES,
     Allow,
     "suggest removing `extern crate` for the 2018 edition"
 }
@@ -1542,7 +1564,7 @@ impl ExternCrate {
 
 impl LintPass for ExternCrate {
     fn get_lints(&self) -> LintArray {
-        lint_array!(UNNECESSARY_EXTERN_CRATE)
+        lint_array!(UNNECESSARY_EXTERN_CRATES)
     }
 }
 
@@ -1555,7 +1577,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ExternCrate {
             if it.attrs.iter().any(|a| a.check_name("macro_use")) {
                 return
             }
-            let mut err = cx.struct_span_lint(UNNECESSARY_EXTERN_CRATE,
+            let mut err = cx.struct_span_lint(UNNECESSARY_EXTERN_CRATES,
                 it.span, "`extern crate` is unnecessary in the new edition");
             if it.vis == hir::Visibility::Public || self.0 > 1 || orig.is_some() {
                 let pub_ = if it.vis == hir::Visibility::Public {

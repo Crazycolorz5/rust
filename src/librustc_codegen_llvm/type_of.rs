@@ -10,10 +10,12 @@
 
 use abi::{FnType, FnTypeExt};
 use common::*;
+use llvm;
 use rustc::hir;
 use rustc::ty::{self, Ty, TypeFoldable};
 use rustc::ty::layout::{self, Align, LayoutOf, Size, TyLayout};
 use rustc_target::spec::PanicStrategy;
+use rustc_target::abi::FloatTy;
 use mono_item::DefPathBasedNames;
 use type_::Type;
 
@@ -39,7 +41,7 @@ fn uncached_llvm_type<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
             if use_x86_mmx {
                 return Type::x86_mmx(cx)
             } else {
-                let element = layout.scalar_llvm_type_at(cx, element, Size::from_bytes(0));
+                let element = layout.scalar_llvm_type_at(cx, element, Size::ZERO);
                 return Type::vector(&element, count);
             }
         }
@@ -119,7 +121,7 @@ fn struct_llfields<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
     let field_count = layout.fields.count();
 
     let mut packed = false;
-    let mut offset = Size::from_bytes(0);
+    let mut offset = Size::ZERO;
     let mut prev_align = layout.align;
     let mut result: Vec<Type> = Vec::with_capacity(1 + field_count * 2);
     for i in layout.fields.index_by_increasing_offset() {
@@ -264,7 +266,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                     );
                     FnType::new(cx, sig, &[]).llvm_type(cx).ptr_to()
                 }
-                _ => self.scalar_llvm_type_at(cx, scalar, Size::from_bytes(0))
+                _ => self.scalar_llvm_type_at(cx, scalar, Size::ZERO)
             };
             cx.scalar_lltypes.borrow_mut().insert(self.ty, llty);
             return llty;
@@ -323,8 +325,8 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                                scalar: &layout::Scalar, offset: Size) -> Type {
         match scalar.value {
             layout::Int(i, _) => Type::from_integer(cx, i),
-            layout::F32 => Type::f32(cx),
-            layout::F64 => Type::f64(cx),
+            layout::Float(FloatTy::F32) => Type::f32(cx),
+            layout::Float(FloatTy::F64) => Type::f64(cx),
             layout::Pointer => {
                 // If we know the alignment, pick something better than i8.
                 let pointee = if let Some(pointee) = self.pointee_info_at(cx, offset) {
@@ -371,7 +373,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
         }
 
         let offset = if index == 0 {
-            Size::from_bytes(0)
+            Size::ZERO
         } else {
             a.value.size(cx).abi_align(b.value.align(cx))
         };
@@ -428,8 +430,13 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                         PointerKind::Shared
                     },
                     hir::MutMutable => {
-                        if cx.tcx.sess.opts.debugging_opts.mutable_noalias ||
-                           cx.tcx.sess.panic_strategy() == PanicStrategy::Abort {
+                        // Only emit noalias annotations for LLVM >= 6 or in panic=abort
+                        // mode, as prior versions had many bugs in conjunction with
+                        // unwinding. See also issue #31681.
+                        let mutable_noalias = cx.tcx.sess.opts.debugging_opts.mutable_noalias
+                            .unwrap_or(unsafe { llvm::LLVMRustVersionMajor() >= 6 }
+                                || cx.tcx.sess.panic_strategy() == PanicStrategy::Abort);
+                        if mutable_noalias {
                             PointerKind::UniqueBorrowed
                         } else {
                             PointerKind::Shared

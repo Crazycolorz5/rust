@@ -483,10 +483,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let index = items.write_index(&mut self.opaque.cursor);
         let index_bytes = self.position() - i;
 
+        let attrs = tcx.hir.krate_attrs();
         let link_meta = self.link_meta;
         let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateTypeProcMacro);
-        let has_default_lib_allocator =
-            attr::contains_name(tcx.hir.krate_attrs(), "default_lib_allocator");
+        let has_default_lib_allocator = attr::contains_name(&attrs, "default_lib_allocator");
         let has_global_allocator = *tcx.sess.has_global_allocator.get();
 
         let root = self.lazy(&CrateRoot {
@@ -509,6 +509,14 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             } else {
                 None
             },
+
+            compiler_builtins: attr::contains_name(&attrs, "compiler_builtins"),
+            needs_allocator: attr::contains_name(&attrs, "needs_allocator"),
+            needs_panic_runtime: attr::contains_name(&attrs, "needs_panic_runtime"),
+            no_builtins: attr::contains_name(&attrs, "no_builtins"),
+            panic_runtime: attr::contains_name(&attrs, "panic_runtime"),
+            profiler_runtime: attr::contains_name(&attrs, "profiler_runtime"),
+            sanitizer_runtime: attr::contains_name(&attrs, "sanitizer_runtime"),
 
             crate_deps,
             dylib_dependency_formats,
@@ -1359,8 +1367,8 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
         }
     }
 
-    fn encode_info_for_embedded_const(&mut self, def_id: DefId) -> Entry<'tcx> {
-        debug!("IsolatedEncoder::encode_info_for_embedded_const({:?})", def_id);
+    fn encode_info_for_anon_const(&mut self, def_id: DefId) -> Entry<'tcx> {
+        debug!("IsolatedEncoder::encode_info_for_anon_const({:?})", def_id);
         let tcx = self.tcx;
         let id = tcx.hir.as_local_node_id(def_id).unwrap();
         let body_id = tcx.hir.body_owned_by(id);
@@ -1623,9 +1631,9 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for EncodeVisitor<'a, 'b, 'tcx> {
                      id: ast::NodeId) {
         intravisit::walk_variant(self, v, g, id);
 
-        if let Some(discr) = v.node.disr_expr {
-            let def_id = self.index.tcx.hir.body_owner_def_id(discr);
-            self.index.record(def_id, IsolatedEncoder::encode_info_for_embedded_const, def_id);
+        if let Some(ref discr) = v.node.disr_expr {
+            let def_id = self.index.tcx.hir.local_def_id(discr.id);
+            self.index.record(def_id, IsolatedEncoder::encode_info_for_anon_const, def_id);
         }
     }
     fn visit_generics(&mut self, generics: &'tcx hir::Generics) {
@@ -1668,9 +1676,9 @@ impl<'a, 'b, 'tcx> IndexBuilder<'a, 'b, 'tcx> {
                 let def_id = self.tcx.hir.local_def_id(ty.id);
                 self.record(def_id, IsolatedEncoder::encode_info_for_anon_ty, def_id);
             }
-            hir::TyArray(_, len) => {
-                let def_id = self.tcx.hir.body_owner_def_id(len);
-                self.record(def_id, IsolatedEncoder::encode_info_for_embedded_const, def_id);
+            hir::TyArray(_, ref length) => {
+                let def_id = self.tcx.hir.local_def_id(length.id);
+                self.record(def_id, IsolatedEncoder::encode_info_for_anon_const, def_id);
             }
             _ => {}
         }

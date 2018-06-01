@@ -187,11 +187,8 @@ impl<'a, 'tcx> MatchCheckCtxt<'a, 'tcx> {
                             .and_then(|t| t.ty.builtin_index())
                             .map_or(false, |t| t == tcx.types.u8);
                         assert!(is_array_ptr);
-                        let alloc = tcx
-                            .interpret_interner
-                            .get_alloc(ptr.alloc_id)
-                            .unwrap();
-                        assert_eq!(ptr.offset, 0);
+                        let alloc = tcx.alloc_map.lock().unwrap_memory(ptr.alloc_id);
+                        assert_eq!(ptr.offset.bytes(), 0);
                         // FIXME: check length
                         alloc.bytes.iter().map(|b| {
                             &*pattern_arena.alloc(Pattern {
@@ -201,7 +198,7 @@ impl<'a, 'tcx> MatchCheckCtxt<'a, 'tcx> {
                                     value: ty::Const::from_bits(
                                         tcx,
                                         *b as u128,
-                                        tcx.types.u8)
+                                        ty::ParamEnv::empty().and(tcx.types.u8))
                                 }
                             })
                         }).collect()
@@ -558,10 +555,7 @@ fn max_slice_length<'p, 'a: 'p, 'tcx: 'a, I>(
                         .and_then(|t| t.ty.builtin_index())
                         .map_or(false, |t| t == cx.tcx.types.u8);
                     if is_array_ptr {
-                        let alloc = cx.tcx
-                            .interpret_interner
-                            .get_alloc(ptr.alloc_id)
-                            .unwrap();
+                        let alloc = cx.tcx.alloc_map.lock().unwrap_memory(ptr.alloc_id);
                         max_fixed_len = cmp::max(max_fixed_len, alloc.bytes.len() as u64);
                     }
                 }
@@ -945,12 +939,7 @@ fn slice_pat_covered_by_constructor<'tcx>(
                     .and_then(|t| t.ty.builtin_index())
                     .map_or(false, |t| t == tcx.types.u8);
                 assert!(is_array_ptr);
-                tcx
-                    .interpret_interner
-                    .get_alloc(ptr.alloc_id)
-                    .unwrap()
-                    .bytes
-                    .as_ref()
+                tcx.alloc_map.lock().unwrap_memory(ptr.alloc_id).bytes.as_ref()
             } else {
                 bug!()
             }
@@ -969,7 +958,7 @@ fn slice_pat_covered_by_constructor<'tcx>(
     {
         match pat.kind {
             box PatternKind::Constant { value } => {
-                let b = value.unwrap_bits(pat.ty);
+                let b = value.unwrap_bits(tcx, ty::ParamEnv::empty().and(pat.ty));
                 assert_eq!(b as u8 as u128, b);
                 if b as u8 != *ch {
                     return Ok(false);
@@ -990,9 +979,9 @@ fn constructor_covered_by_range<'a, 'tcx>(
     ty: Ty<'tcx>,
 ) -> Result<bool, ErrorReported> {
     trace!("constructor_covered_by_range {:#?}, {:#?}, {:#?}, {}", ctor, from, to, ty);
-    let cmp_from = |c_from| compare_const_vals(tcx, c_from, from, ty)
+    let cmp_from = |c_from| compare_const_vals(tcx, c_from, from, ty::ParamEnv::empty().and(ty))
         .map(|res| res != Ordering::Less);
-    let cmp_to = |c_to| compare_const_vals(tcx, c_to, to, ty);
+    let cmp_to = |c_to| compare_const_vals(tcx, c_to, to, ty::ParamEnv::empty().and(ty));
     macro_rules! some_or_ok {
         ($e:expr) => {
             match $e {
@@ -1088,9 +1077,9 @@ fn specialize<'p, 'a: 'p, 'tcx: 'a>(
                             .map_or(false, |t| t == cx.tcx.types.u8);
                         assert!(is_array_ptr);
                         let data_len = cx.tcx
-                            .interpret_interner
-                            .get_alloc(ptr.alloc_id)
-                            .unwrap()
+                            .alloc_map
+                            .lock()
+                            .unwrap_memory(ptr.alloc_id)
                             .bytes
                             .len();
                         if wild_patterns.len() == data_len {

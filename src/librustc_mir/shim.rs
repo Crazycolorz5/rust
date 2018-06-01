@@ -13,7 +13,7 @@ use rustc::hir::def_id::DefId;
 use rustc::infer;
 use rustc::mir::*;
 use rustc::ty::{self, Ty, TyCtxt, GenericParamDefKind};
-use rustc::ty::subst::{Kind, Subst, Substs};
+use rustc::ty::subst::{Subst, Substs};
 use rustc::ty::maps::Providers;
 
 use rustc_data_structures::indexed_vec::{IndexVec, Idx};
@@ -138,10 +138,11 @@ enum CallKind {
 }
 
 fn temp_decl(mutability: Mutability, ty: Ty, span: Span) -> LocalDecl {
+    let source_info = SourceInfo { scope: OUTERMOST_SOURCE_SCOPE, span };
     LocalDecl {
         mutability, ty, name: None,
-        source_info: SourceInfo { scope: ARGUMENT_VISIBILITY_SCOPE, span },
-        syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
+        source_info,
+        visibility_scope: source_info.scope,
         internal: false,
         is_user_variable: false
     }
@@ -170,7 +171,7 @@ fn build_drop_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     let substs = if let Some(ty) = ty {
-        tcx.mk_substs(iter::once(Kind::from(ty)))
+        tcx.intern_substs(&[ty.into()])
     } else {
         Substs::identity_for_item(tcx, def_id)
     };
@@ -178,7 +179,7 @@ fn build_drop_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let sig = tcx.erase_late_bound_regions(&sig);
     let span = tcx.def_span(def_id);
 
-    let source_info = SourceInfo { span, scope: ARGUMENT_VISIBILITY_SCOPE };
+    let source_info = SourceInfo { span, scope: OUTERMOST_SOURCE_SCOPE };
 
     let return_block = BasicBlock::new(1);
     let mut blocks = IndexVec::new();
@@ -195,7 +196,7 @@ fn build_drop_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let mut mir = Mir::new(
         blocks,
         IndexVec::from_elem_n(
-            VisibilityScopeData { span: span, parent_scope: None }, 1
+            SourceScopeData { span: span, parent_scope: None }, 1
         ),
         ClearCrossCrate::Clear,
         IndexVec::new(),
@@ -354,7 +355,7 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
         Mir::new(
             self.blocks,
             IndexVec::from_elem_n(
-                VisibilityScopeData { span: self.span, parent_scope: None }, 1
+                SourceScopeData { span: self.span, parent_scope: None }, 1
             ),
             ClearCrossCrate::Clear,
             IndexVec::new(),
@@ -367,7 +368,7 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
     }
 
     fn source_info(&self) -> SourceInfo {
-        SourceInfo { span: self.span, scope: ARGUMENT_VISIBILITY_SCOPE }
+        SourceInfo { span: self.span, scope: OUTERMOST_SOURCE_SCOPE }
     }
 
     fn block(
@@ -430,7 +431,7 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
         let substs = Substs::for_item(tcx, self.def_id, |param, _| {
             match param.kind {
                 GenericParamDefKind::Lifetime => tcx.types.re_erased.into(),
-                GenericParamDefKind::Type(_) => ty.into(),
+                GenericParamDefKind::Type {..} => ty.into(),
             }
         });
 
@@ -688,7 +689,7 @@ fn build_call_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     debug!("build_call_shim: sig={:?}", sig);
 
     let mut local_decls = local_decls_for_sig(&sig, span);
-    let source_info = SourceInfo { span, scope: ARGUMENT_VISIBILITY_SCOPE };
+    let source_info = SourceInfo { span, scope: OUTERMOST_SOURCE_SCOPE };
 
     let rcvr_arg = Local::new(1+0);
     let rcvr_l = Place::Local(rcvr_arg);
@@ -794,7 +795,7 @@ fn build_call_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let mut mir = Mir::new(
         blocks,
         IndexVec::from_elem_n(
-            VisibilityScopeData { span: span, parent_scope: None }, 1
+            SourceScopeData { span: span, parent_scope: None }, 1
         ),
         ClearCrossCrate::Clear,
         IndexVec::new(),
@@ -836,7 +837,7 @@ pub fn build_adt_ctor<'a, 'gcx, 'tcx>(infcx: &infer::InferCtxt<'a, 'gcx, 'tcx>,
 
     let source_info = SourceInfo {
         span,
-        scope: ARGUMENT_VISIBILITY_SCOPE
+        scope: OUTERMOST_SOURCE_SCOPE
     };
 
     let variant_no = if adt_def.is_enum() {
@@ -869,7 +870,7 @@ pub fn build_adt_ctor<'a, 'gcx, 'tcx>(infcx: &infer::InferCtxt<'a, 'gcx, 'tcx>,
     Mir::new(
         IndexVec::from_elem_n(start_block, 1),
         IndexVec::from_elem_n(
-            VisibilityScopeData { span: span, parent_scope: None }, 1
+            SourceScopeData { span: span, parent_scope: None }, 1
         ),
         ClearCrossCrate::Clear,
         IndexVec::new(),

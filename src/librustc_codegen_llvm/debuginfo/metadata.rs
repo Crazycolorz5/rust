@@ -23,12 +23,11 @@ use llvm::{self, ValueRef};
 use llvm::debuginfo::{DIType, DIFile, DIScope, DIDescriptor,
                       DICompositeType, DILexicalBlock, DIFlags};
 
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc::hir::CodegenFnAttrFlags;
 use rustc::hir::def::CtorKind;
 use rustc::hir::def_id::{DefId, CrateNum, LOCAL_CRATE};
-use rustc::ty::fold::TypeVisitor;
-use rustc::ty::util::TypeIdHasher;
-use rustc::ich::Fingerprint;
+use rustc::ich::{Fingerprint, NodeIdHashingMode};
 use rustc::ty::Instance;
 use common::CodegenCx;
 use rustc::ty::{self, AdtKind, ParamEnv, Ty, TyCtxt};
@@ -144,9 +143,15 @@ impl<'tcx> TypeMap<'tcx> {
 
         // The hasher we are using to generate the UniqueTypeId. We want
         // something that provides more than the 64 bits of the DefaultHasher.
-        let mut type_id_hasher = TypeIdHasher::<Fingerprint>::new(cx.tcx);
-        type_id_hasher.visit_ty(type_);
-        let unique_type_id = type_id_hasher.finish().to_hex();
+        let mut hasher = StableHasher::<Fingerprint>::new();
+        let mut hcx = cx.tcx.create_stable_hashing_context();
+        let type_ = cx.tcx.erase_regions(&type_);
+        hcx.while_hashing_spans(false, |hcx| {
+            hcx.with_node_id_hashing_mode(NodeIdHashingMode::HashDefPath, |hcx| {
+                type_.hash_stable(hcx, &mut hasher);
+            });
+        });
+        let unique_type_id = hasher.finish().to_hex();
 
         let key = self.unique_id_interner.intern(&unique_type_id);
         self.type_to_unique_id.insert(type_, UniqueTypeId(key));
@@ -320,7 +325,7 @@ fn vec_slice_metadata<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
         MemberDescription {
             name: "data_ptr".to_string(),
             type_metadata: data_ptr_metadata,
-            offset: Size::from_bytes(0),
+            offset: Size::ZERO,
             size: pointer_size,
             align: pointer_align,
             flags: DIFlags::FlagZero,
@@ -946,7 +951,7 @@ impl<'tcx> StructMemberDescriptionFactory<'tcx> {
             let name = if self.variant.ctor_kind == CtorKind::Fn {
                 format!("__{}", i)
             } else {
-                f.name.to_string()
+                f.ident.to_string()
             };
             let field = layout.field(cx, i);
             let (size, align) = field.size_and_align();
@@ -1067,9 +1072,9 @@ impl<'tcx> UnionMemberDescriptionFactory<'tcx> {
             let field = self.layout.field(cx, i);
             let (size, align) = field.size_and_align();
             MemberDescription {
-                name: f.name.to_string(),
+                name: f.ident.to_string(),
                 type_metadata: type_metadata(cx, field.ty, self.span),
-                offset: Size::from_bytes(0),
+                offset: Size::ZERO,
                 size,
                 align,
                 flags: DIFlags::FlagZero,
@@ -1153,7 +1158,7 @@ impl<'tcx> EnumMemberDescriptionFactory<'tcx> {
                     MemberDescription {
                         name: "".to_string(),
                         type_metadata: variant_type_metadata,
-                        offset: Size::from_bytes(0),
+                        offset: Size::ZERO,
                         size: self.layout.size,
                         align: self.layout.align,
                         flags: DIFlags::FlagZero
@@ -1182,7 +1187,7 @@ impl<'tcx> EnumMemberDescriptionFactory<'tcx> {
                     MemberDescription {
                         name: "".to_string(),
                         type_metadata: variant_type_metadata,
-                        offset: Size::from_bytes(0),
+                        offset: Size::ZERO,
                         size: variant.size,
                         align: variant.align,
                         flags: DIFlags::FlagZero
@@ -1243,7 +1248,7 @@ impl<'tcx> EnumMemberDescriptionFactory<'tcx> {
                     MemberDescription {
                         name,
                         type_metadata: variant_type_metadata,
-                        offset: Size::from_bytes(0),
+                        offset: Size::ZERO,
                         size: variant.size,
                         align: variant.align,
                         flags: DIFlags::FlagZero
@@ -1333,7 +1338,7 @@ fn describe_enum_variant<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
         let name = if variant.ctor_kind == CtorKind::Fn {
             format!("__{}", i)
         } else {
-            variant.fields[i].name.to_string()
+            variant.fields[i].ident.to_string()
         };
         (name, layout.field(cx, i).ty)
     })).collect();
@@ -1742,7 +1747,7 @@ pub fn create_vtable_metadata<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
             name.as_ptr(),
             unknown_file_metadata(cx),
             UNKNOWN_LINE_NUMBER,
-            Size::from_bytes(0).bits(),
+            Size::ZERO.bits(),
             cx.tcx.data_layout.pointer_align.abi_bits() as u32,
             DIFlags::FlagArtificial,
             ptr::null_mut(),

@@ -105,6 +105,10 @@ impl<'a, 'tcx, Q: QueryDescription<'tcx>> JobOwner<'a, 'tcx, Q> {
     /// start executing the query, or it returns with the result of the query.
     /// If the query is executing elsewhere, this will wait for it.
     /// If the query panicked, this will silently panic.
+    ///
+    /// This function is inlined because that results in a noticeable speedup
+    /// for some compile-time benchmarks.
+    #[inline(always)]
     pub(super) fn try_get(
         tcx: TyCtxt<'a, 'tcx, '_>,
         span: Span,
@@ -697,6 +701,16 @@ macro_rules! define_maps {
             })*
         }
 
+        // This module and the functions in it exist only to provide a
+        // predictable symbol name prefix for query providers. This is helpful
+        // for analyzing queries in profilers.
+        pub(super) mod __query_compute {
+            $(#[inline(never)]
+            pub fn $name<F: FnOnce() -> R, R>(f: F) -> R {
+                f()
+            })*
+        }
+
         $(impl<$tcx> QueryConfig<$tcx> for queries::$name<$tcx> {
             type Key = $K;
             type Value = $V;
@@ -718,9 +732,12 @@ macro_rules! define_maps {
                 DepNode::new(tcx, $node(*key))
             }
 
+            #[inline]
             fn compute(tcx: TyCtxt<'_, 'tcx, '_>, key: Self::Key) -> Self::Value {
-                let provider = tcx.maps.providers[key.map_crate()].$name;
-                provider(tcx.global_tcx(), key)
+                __query_compute::$name(move || {
+                    let provider = tcx.maps.providers[key.map_crate()].$name;
+                    provider(tcx.global_tcx(), key)
+                })
             }
 
             fn handle_cycle_error(tcx: TyCtxt<'_, 'tcx, '_>) -> Self::Value {

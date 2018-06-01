@@ -172,6 +172,13 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
             ExprKind::InlineAsm(..) if !self.session.target.target.options.allow_asm => {
                 span_err!(self.session, expr.span, E0472, "asm! is unsupported on this target");
             }
+            ExprKind::ObsoleteInPlace(..) => {
+                self.err_handler()
+                    .struct_span_err(expr.span, "emplacement syntax is obsolete (for now, anyway)")
+                    .note("for more information, see \
+                           <https://github.com/rust-lang/rust/issues/27779#issuecomment-378416911>")
+                    .emit();
+            }
             _ => {}
         }
 
@@ -432,6 +439,13 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
             }
         }
         visit::walk_generics(self, g)
+    }
+
+    fn visit_generic_param(&mut self, param: &'a GenericParam) {
+        if let GenericParam::Lifetime(ref ld) = *param {
+            self.check_lifetime(ld.lifetime.ident);
+        }
+        visit::walk_generic_param(self, param);
     }
 
     fn visit_pat(&mut self, pat: &'a Pat) {

@@ -376,37 +376,6 @@ pub fn from_utf8_mut(v: &mut [u8]) -> Result<&mut str, Utf8Error> {
     Ok(unsafe { from_utf8_unchecked_mut(v) })
 }
 
-/// Forms a str from a pointer and a length.
-///
-/// The `len` argument is the number of bytes in the string.
-///
-/// # Safety
-///
-/// This function is unsafe as there is no guarantee that the given pointer is
-/// valid for `len` bytes, nor whether the lifetime inferred is a suitable
-/// lifetime for the returned str.
-///
-/// The data must be valid UTF-8
-///
-/// `p` must be non-null, even for zero-length strs, because non-zero bits
-/// are required to distinguish between a zero-length str within `Some()`
-/// from `None`. `p` can be a bogus non-dereferencable pointer, such as `0x1`,
-/// for zero-length strs, though.
-///
-/// # Caveat
-///
-/// The lifetime for the returned str is inferred from its usage. To
-/// prevent accidental misuse, it's suggested to tie the lifetime to whichever
-/// source lifetime is safe in the context, such as by providing a helper
-/// function taking the lifetime of a host value for the str, or by explicit
-/// annotation.
-/// Performs the same functionality as `from_raw_parts`, except that a mutable
-/// str is returned.
-///
-unsafe fn from_raw_parts_mut<'a>(p: *mut u8, len: usize) -> &'a mut str {
-    from_utf8_unchecked_mut(slice::from_raw_parts_mut(p, len))
-}
-
 /// Converts a slice of bytes to a string slice without checking
 /// that the string contains valid UTF-8.
 ///
@@ -2166,7 +2135,8 @@ impl str {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
-    pub fn len(&self) -> usize {
+    #[rustc_const_unstable(feature = "const_str_len")]
+    pub const fn len(&self) -> usize {
         self.as_bytes().len()
     }
 
@@ -2185,7 +2155,8 @@ impl str {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn is_empty(&self) -> bool {
+    #[rustc_const_unstable(feature = "const_str_len")]
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
@@ -2242,8 +2213,13 @@ impl str {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe { &*(self as *const str as *const [u8]) }
+    #[rustc_const_unstable(feature="const_str_as_bytes")]
+    pub const fn as_bytes(&self) -> &[u8] {
+        union Slices<'a> {
+            str: &'a str,
+            slice: &'a [u8],
+        }
+        unsafe { Slices { str: self }.slice }
     }
 
     /// Converts a mutable string slice to a mutable byte slice. To convert the
@@ -2303,7 +2279,8 @@ impl str {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
-    pub fn as_ptr(&self) -> *const u8 {
+    #[rustc_const_unstable(feature = "const_str_as_ptr")]
+    pub const fn as_ptr(&self) -> *const u8 {
         self as *const str as *const u8
     }
 
@@ -2594,8 +2571,11 @@ impl str {
             let len = self.len();
             let ptr = self.as_ptr() as *mut u8;
             unsafe {
-                (from_raw_parts_mut(ptr, mid),
-                 from_raw_parts_mut(ptr.offset(mid as isize), len - mid))
+                (from_utf8_unchecked_mut(slice::from_raw_parts_mut(ptr, mid)),
+                 from_utf8_unchecked_mut(slice::from_raw_parts_mut(
+                    ptr.offset(mid as isize),
+                    len - mid
+                 )))
             }
         } else {
             slice_error_fail(self, 0, mid)

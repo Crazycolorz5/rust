@@ -42,46 +42,15 @@ pub fn mir_build<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> Mir<'t
 
     // Figure out what primary body this item has.
     let body_id = match tcx.hir.get(id) {
-        hir::map::NodeItem(item) => {
-            match item.node {
-                hir::ItemConst(_, body) |
-                hir::ItemStatic(_, _, body) |
-                hir::ItemFn(.., body) => body,
-                _ => unsupported()
-            }
-        }
-        hir::map::NodeTraitItem(item) => {
-            match item.node {
-                hir::TraitItemKind::Const(_, Some(body)) |
-                hir::TraitItemKind::Method(_,
-                    hir::TraitMethod::Provided(body)) => body,
-                _ => unsupported()
-            }
-        }
-        hir::map::NodeImplItem(item) => {
-            match item.node {
-                hir::ImplItemKind::Const(_, body) |
-                hir::ImplItemKind::Method(_, body) => body,
-                _ => unsupported()
-            }
-        }
-        hir::map::NodeExpr(expr) => {
-            // FIXME(eddyb) Closures should have separate
-            // function definition IDs and expression IDs.
-            // Type-checking should not let closures get
-            // this far in a constant position.
-            // Assume that everything other than closures
-            // is a constant "initializer" expression.
-            match expr.node {
-                hir::ExprClosure(_, _, body, _, _) => body,
-                _ => hir::BodyId { node_id: expr.id },
-            }
-        }
         hir::map::NodeVariant(variant) =>
             return create_constructor_shim(tcx, id, &variant.node.data),
         hir::map::NodeStructCtor(ctor) =>
             return create_constructor_shim(tcx, id, ctor),
-        _ => unsupported(),
+
+        _ => match tcx.hir.maybe_body_owned_by(id) {
+            Some(body) => body,
+            None => unsupported(),
+        },
     };
 
     tcx.infer_ctxt().enter(|infcx| {
@@ -287,9 +256,9 @@ struct Builder<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
 
     /// the vector of all scopes that we have created thus far;
     /// we track this for debuginfo later
-    visibility_scopes: IndexVec<VisibilityScope, VisibilityScopeData>,
-    visibility_scope_info: IndexVec<VisibilityScope, VisibilityScopeInfo>,
-    visibility_scope: VisibilityScope,
+    source_scopes: IndexVec<SourceScope, SourceScopeData>,
+    source_scope_local_data: IndexVec<SourceScope, SourceScopeLocalData>,
+    source_scope: SourceScope,
 
     /// the guard-context: each time we build the guard expression for
     /// a match arm, we push onto this stack, and then pop when we
@@ -324,7 +293,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
 #[derive(Debug)]
 enum LocalsForNode {
     One(Local),
-    Two { for_guard: Local, for_arm_body: Local },
+    Three { val_for_guard: Local, ref_for_guard: Local, for_arm_body: Local },
 }
 
 #[derive(Debug)]
@@ -356,12 +325,15 @@ struct GuardFrame {
     locals: Vec<GuardFrameLocal>,
 }
 
-/// ForGuard is isomorphic to a boolean flag. It indicates whether we are
-/// talking about the temp for a local binding for a use within a guard expression,
-/// or a temp for use outside of a guard expressions.
+/// ForGuard indicates whether we are talking about:
+///   1. the temp for a local binding used solely within guard expressions,
+///   2. the temp that holds reference to (1.), which is actually what the
+///      guard expressions see, or
+///   3. the temp for use outside of guard expressions.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ForGuard {
-    WithinGuard,
+    ValWithinGuard,
+    RefWithinGuard,
     OutsideGuard,
 }
 
@@ -369,11 +341,13 @@ impl LocalsForNode {
     fn local_id(&self, for_guard: ForGuard) -> Local {
         match (self, for_guard) {
             (&LocalsForNode::One(local_id), ForGuard::OutsideGuard) |
-            (&LocalsForNode::Two { for_guard: local_id, .. }, ForGuard::WithinGuard) |
-            (&LocalsForNode::Two { for_arm_body: local_id, .. }, ForGuard::OutsideGuard) =>
+            (&LocalsForNode::Three { val_for_guard: local_id, .. }, ForGuard::ValWithinGuard) |
+            (&LocalsForNode::Three { ref_for_guard: local_id, .. }, ForGuard::RefWithinGuard) |
+            (&LocalsForNode::Three { for_arm_body: local_id, .. }, ForGuard::OutsideGuard) =>
                 local_id,
 
-            (&LocalsForNode::One(_), ForGuard::WithinGuard) =>
+            (&LocalsForNode::One(_), ForGuard::ValWithinGuard) |
+            (&LocalsForNode::One(_), ForGuard::RefWithinGuard) =>
                 bug!("anything with one local should never be within a guard."),
         }
     }
@@ -619,9 +593,9 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             fn_span: span,
             arg_count,
             scopes: vec![],
-            visibility_scopes: IndexVec::new(),
-            visibility_scope: ARGUMENT_VISIBILITY_SCOPE,
-            visibility_scope_info: IndexVec::new(),
+            source_scopes: IndexVec::new(),
+            source_scope: OUTERMOST_SOURCE_SCOPE,
+            source_scope_local_data: IndexVec::new(),
             guard_context: vec![],
             push_unsafe_count: 0,
             unpushed_unsafe: safety,
@@ -637,9 +611,9 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
 
         assert_eq!(builder.cfg.start_new_block(), START_BLOCK);
         assert_eq!(
-            builder.new_visibility_scope(span, lint_level, Some(safety)),
-            ARGUMENT_VISIBILITY_SCOPE);
-        builder.visibility_scopes[ARGUMENT_VISIBILITY_SCOPE].parent_scope = None;
+            builder.new_source_scope(span, lint_level, Some(safety)),
+            OUTERMOST_SOURCE_SCOPE);
+        builder.source_scopes[OUTERMOST_SOURCE_SCOPE].parent_scope = None;
 
         builder
     }
@@ -655,8 +629,8 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         }
 
         Mir::new(self.cfg.basic_blocks,
-                 self.visibility_scopes,
-                 ClearCrossCrate::Set(self.visibility_scope_info),
+                 self.source_scopes,
+                 ClearCrossCrate::Set(self.source_scope_local_data),
                  IndexVec::new(),
                  yield_ty,
                  self.local_decls,
@@ -683,14 +657,15 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 }
             }
 
+            let source_info = SourceInfo {
+                scope: OUTERMOST_SOURCE_SCOPE,
+                span: pattern.map_or(self.fn_span, |pat| pat.span)
+            };
             self.local_decls.push(LocalDecl {
                 mutability: Mutability::Mut,
                 ty,
-                source_info: SourceInfo {
-                    scope: ARGUMENT_VISIBILITY_SCOPE,
-                    span: pattern.map_or(self.fn_span, |pat| pat.span)
-                },
-                syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
+                source_info,
+                visibility_scope: source_info.scope,
                 name,
                 internal: false,
                 is_user_variable: false,
@@ -728,9 +703,9 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
 
         }
 
-        // Enter the argument pattern bindings visibility scope, if it exists.
-        if let Some(visibility_scope) = scope {
-            self.visibility_scope = visibility_scope;
+        // Enter the argument pattern bindings source scope, if it exists.
+        if let Some(source_scope) = scope {
+            self.source_scope = source_scope;
         }
 
         let body = self.hir.mirror(ast_body);

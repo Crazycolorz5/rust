@@ -115,7 +115,7 @@ unsafe fn exchange_malloc(size: usize, align: usize) -> *mut u8 {
         if !ptr.is_null() {
             ptr as *mut u8
         } else {
-            oom()
+            oom(layout)
         }
     }
 }
@@ -133,12 +133,14 @@ pub(crate) unsafe fn box_free<T: ?Sized>(ptr: Unique<T>) {
     }
 }
 
-pub fn oom() -> ! {
-    extern {
+#[rustc_allocator_nounwind]
+pub fn oom(layout: Layout) -> ! {
+    #[allow(improper_ctypes)]
+    extern "Rust" {
         #[lang = "oom"]
-        fn oom_impl() -> !;
+        fn oom_impl(layout: Layout) -> !;
     }
-    unsafe { oom_impl() }
+    unsafe { oom_impl(layout) }
 }
 
 #[cfg(test)]
@@ -153,7 +155,7 @@ mod tests {
         unsafe {
             let layout = Layout::from_size_align(1024, 1).unwrap();
             let ptr = Global.alloc_zeroed(layout.clone())
-                .unwrap_or_else(|_| oom());
+                .unwrap_or_else(|_| oom(layout));
 
             let mut i = ptr.cast::<u8>().as_ptr();
             let end = i.offset(layout.size() as isize);

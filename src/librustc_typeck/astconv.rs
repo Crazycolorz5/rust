@@ -18,16 +18,16 @@ use hir::def::Def;
 use hir::def_id::DefId;
 use middle::resolve_lifetime as rl;
 use namespace::Namespace;
-use rustc::ty::subst::{Kind, UnpackedKind, Subst, Substs};
+use rustc::ty::subst::{Subst, Substs};
 use rustc::traits;
-use rustc::ty::{self, RegionKind, Ty, TyCtxt, ToPredicate, TypeFoldable};
+use rustc::ty::{self, Ty, TyCtxt, ToPredicate, TypeFoldable};
 use rustc::ty::GenericParamDefKind;
 use rustc::ty::wf::object_region_bounds;
 use rustc_target::spec::abi;
 use std::slice;
 use require_c_abi_if_variadic;
 use util::common::ErrorReported;
-use util::nodemap::FxHashSet;
+use util::nodemap::{FxHashSet, FxHashMap};
 use errors::FatalError;
 
 use std::iter;
@@ -224,9 +224,9 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                 GenericParamDefKind::Lifetime => {
                     lt_accepted += 1;
                 }
-                GenericParamDefKind::Type(ty) => {
+                GenericParamDefKind::Type { has_default, .. } => {
                     ty_params.accepted += 1;
-                    if !ty.has_default {
+                    if !has_default {
                         ty_params.required += 1;
                     }
                 }
@@ -251,8 +251,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
 
         let is_object = self_ty.map_or(false, |ty| ty.sty == TRAIT_OBJECT_DUMMY_SELF);
         let default_needs_object_self = |param: &ty::GenericParamDef| {
-            if let GenericParamDefKind::Type(ty) = param.kind {
-                if is_object && ty.has_default {
+            if let GenericParamDefKind::Type { has_default, .. } = param.kind {
+                if is_object && has_default {
                     if tcx.at(span).type_of(param.def_id).has_self_ty() {
                         // There is no suitable inference default for a type parameter
                         // that references self, in an object type.
@@ -275,7 +275,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                         tcx.types.re_static.into()
                     }
                 }
-                GenericParamDefKind::Type(ty) => {
+                GenericParamDefKind::Type { has_default, .. } => {
                     let i = param.index as usize;
 
                     // Handle Self first, so we can adjust the index to match the AST.
@@ -294,7 +294,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                         } else {
                             self.ty_infer(span).into()
                         }
-                    } else if ty.has_default {
+                    } else if has_default {
                         // No type parameter provided, but a default exists.
 
                         // If we are converting an object type, then the
@@ -398,11 +398,12 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                                  trait_ref.path.segments.last().unwrap());
         let poly_trait_ref = ty::Binder::bind(ty::TraitRef::new(trait_def_id, substs));
 
+        let mut dup_bindings = FxHashMap::default();
         poly_projections.extend(assoc_bindings.iter().filter_map(|binding| {
             // specify type to assert that error was already reported in Err case:
             let predicate: Result<_, ErrorReported> =
-                self.ast_type_binding_to_poly_projection_predicate(trait_ref.ref_id, poly_trait_ref,
-                                                                   binding, speculative);
+                self.ast_type_binding_to_poly_projection_predicate(
+                    trait_ref.ref_id, poly_trait_ref, binding, speculative, &mut dup_bindings);
             predicate.ok() // ok to ignore Err() because ErrorReported (see above)
         }));
 
@@ -487,7 +488,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
         ref_id: ast::NodeId,
         trait_ref: ty::PolyTraitRef<'tcx>,
         binding: &ConvertedBinding<'tcx>,
-        speculative: bool)
+        speculative: bool,
+        dup_bindings: &mut FxHashMap<DefId, Span>)
         -> Result<ty::PolyProjectionPredicate<'tcx>, ErrorReported>
     {
         let tcx = self.tcx();
@@ -555,7 +557,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                           binding.item_name, binding.span)
         }?;
 
-        let (assoc_ident, def_scope) = tcx.adjust(binding.item_name, candidate.def_id(), ref_id);
+        let (assoc_ident, def_scope) =
+            tcx.adjust_ident(binding.item_name.to_ident(), candidate.def_id(), ref_id);
         let assoc_ty = tcx.associated_items(candidate.def_id()).find(|i| {
             i.kind == ty::AssociatedKind::Type && i.name.to_ident() == assoc_ident
         }).expect("missing associated type");
@@ -565,6 +568,23 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
             tcx.sess.span_err(binding.span, &msg);
         }
         tcx.check_stability(assoc_ty.def_id, Some(ref_id), binding.span);
+
+        if !speculative {
+            dup_bindings.entry(assoc_ty.def_id)
+                .and_modify(|prev_span| {
+                    let mut err = self.tcx().struct_span_lint_node(
+                        ::rustc::lint::builtin::DUPLICATE_ASSOCIATED_TYPE_BINDINGS,
+                        ref_id,
+                        binding.span,
+                        &format!("associated type binding `{}` specified more than once",
+                                binding.item_name)
+                    );
+                    err.span_label(binding.span, "used more than once");
+                    err.span_label(*prev_span, format!("first use of `{}`", binding.item_name));
+                    err.emit();
+                })
+                .or_insert(binding.span);
+        }
 
         Ok(candidate.map_bound(|trait_ref| {
             ty::ProjectionPredicate {
@@ -888,7 +908,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
         };
 
         let trait_did = bound.def_id();
-        let (assoc_ident, def_scope) = tcx.adjust(assoc_name, trait_did, ref_id);
+        let (assoc_ident, def_scope) = tcx.adjust_ident(assoc_name.to_ident(), trait_did, ref_id);
         let item = tcx.associated_items(trait_did).find(|i| {
             Namespace::from(i.kind) == Namespace::Type &&
             i.name.to_ident() == assoc_ident
@@ -1116,8 +1136,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                 };
                 self.associated_path_def_to_ty(ast_ty.id, ast_ty.span, ty, def, segment).0
             }
-            hir::TyArray(ref ty, length) => {
-                let length_def_id = tcx.hir.body_owner_def_id(length);
+            hir::TyArray(ref ty, ref length) => {
+                let length_def_id = tcx.hir.local_def_id(length.id);
                 let substs = Substs::identity_for_item(tcx, length_def_id);
                 let length = ty::Const::unevaluated(tcx, length_def_id, substs, tcx.types.usize);
                 let array_ty = tcx.mk_ty(ty::TyArray(self.ast_ty_to_ty(&ty), length));
@@ -1152,32 +1172,29 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
         let tcx = self.tcx();
         let generics = tcx.generics_of(def_id);
 
-        // Fill in the substs of the parent generics
         debug!("impl_trait_ty_to_ty: generics={:?}", generics);
-        let mut substs = Vec::with_capacity(generics.count());
-        if let Some(parent_id) = generics.parent {
-            let parent_generics = tcx.generics_of(parent_id);
-            Substs::fill_item(&mut substs, tcx, parent_generics, &mut |param, _| {
-                tcx.mk_param_from_def(param)
-            });
-
-            // Replace all lifetimes with 'static
-            for subst in &mut substs {
-                if let UnpackedKind::Lifetime(_) = subst.unpack() {
-                    *subst = Kind::from(&RegionKind::ReStatic);
+        let substs = Substs::for_item(tcx, def_id, |param, _| {
+            if let Some(i) = (param.index as usize).checked_sub(generics.parent_count) {
+                // Our own parameters are the resolved lifetimes.
+                match param.kind {
+                    GenericParamDefKind::Lifetime => {
+                        self.ast_region_to_region(&lifetimes[i], None).into()
+                    }
+                    _ => bug!()
+                }
+            } else {
+                // Replace all parent lifetimes with 'static.
+                match param.kind {
+                    GenericParamDefKind::Lifetime => {
+                        tcx.types.re_static.into()
+                    }
+                    _ => tcx.mk_param_from_def(param)
                 }
             }
-            debug!("impl_trait_ty_to_ty: substs from parent = {:?}", substs);
-        }
-        assert_eq!(substs.len(), generics.parent_count);
-
-        // Fill in our own generics with the resolved lifetimes
-        assert_eq!(lifetimes.len(), generics.params.len());
-        substs.extend(lifetimes.iter().map(|lt| Kind::from(self.ast_region_to_region(lt, None))));
-
+        });
         debug!("impl_trait_ty_to_ty: final substs = {:?}", substs);
 
-        tcx.mk_anon(def_id, tcx.intern_substs(&substs))
+        tcx.mk_anon(def_id, substs)
     }
 
     pub fn ty_of_arg(&self,

@@ -27,7 +27,7 @@ use super::{
     Overflow,
 };
 
-use errors::DiagnosticBuilder;
+use errors::{Applicability, DiagnosticBuilder};
 use hir;
 use hir::def_id::DefId;
 use infer::{self, InferCtxt};
@@ -383,7 +383,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
         for param in generics.params.iter() {
             let value = match param.kind {
-                GenericParamDefKind::Type(_) => {
+                GenericParamDefKind::Type {..} => {
                     trait_ref.substs[param.index as usize].to_string()
                 },
                 GenericParamDefKind::Lifetime => continue,
@@ -652,14 +652,10 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                             && fallback_has_occurred
                         {
                             let predicate = trait_predicate.map_bound(|mut trait_pred| {
-                                {
-                                    let trait_ref = &mut trait_pred.trait_ref;
-                                    let never_substs = trait_ref.substs;
-                                    let mut unit_substs = Vec::with_capacity(never_substs.len());
-                                    unit_substs.push(self.tcx.mk_nil().into());
-                                    unit_substs.extend(&never_substs[1..]);
-                                    trait_ref.substs = self.tcx.intern_substs(&unit_substs);
-                                }
+                                trait_pred.trait_ref.substs = self.tcx.mk_substs_trait(
+                                    self.tcx.mk_nil(),
+                                    &trait_pred.trait_ref.substs[1..],
+                                );
                                 trait_pred
                             });
                             let unit_obligation = Obligation {
@@ -856,9 +852,12 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                 if let Some(ref expr) = local.init {
                     if let hir::ExprIndex(_, _) = expr.node {
                         if let Ok(snippet) = self.tcx.sess.codemap().span_to_snippet(expr.span) {
-                            err.span_suggestion(expr.span,
-                                                "consider borrowing here",
-                                                format!("&{}", snippet));
+                            err.span_suggestion_with_applicability(
+                                expr.span,
+                                "consider borrowing here",
+                                format!("&{}", snippet),
+                                Applicability::MachineApplicable
+                            );
                         }
                     }
                 }
@@ -901,7 +900,9 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         let format_str = format!("consider removing {} leading `&`-references",
                                                  remove_refs);
 
-                        err.span_suggestion_short(sp, &format_str, String::from(""));
+                        err.span_suggestion_short_with_applicability(
+                            sp, &format_str, String::from(""), Applicability::MachineApplicable
+                        );
                         break;
                     }
                 } else {
@@ -980,7 +981,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
             }) => {
                 (self.tcx.sess.codemap().def_span(span),
                  fields.iter().map(|field| {
-                     ArgKind::Arg(format!("{}", field.name), "_".to_string())
+                     ArgKind::Arg(format!("{}", field.ident), "_".to_string())
                  }).collect::<Vec<_>>())
             }
             hir::map::NodeStructCtor(ref variant_data) => {
@@ -1046,10 +1047,11 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     let sugg = fields.iter()
                         .map(|(name, _)| name.to_owned())
                         .collect::<Vec<String>>().join(", ");
-                    err.span_suggestion(found_span,
-                                        "change the closure to take multiple arguments instead of \
-                                         a single tuple",
-                                        format!("|{}|", sugg));
+                    err.span_suggestion_with_applicability(found_span,
+                                                           "change the closure to take multiple \
+                                                            arguments instead of a single tuple",
+                                                           format!("|{}|", sugg),
+                                                           Applicability::MachineApplicable);
                 }
             }
             if let &[ArgKind::Tuple(_, ref fields)] = &expected_args[..] {
@@ -1077,10 +1079,13 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                             "".to_owned()
                         },
                     );
-                    err.span_suggestion(found_span,
-                                        "change the closure to accept a tuple instead of \
-                                         individual arguments",
-                                        sugg);
+                    err.span_suggestion_with_applicability(
+                        found_span,
+                        "change the closure to accept a tuple instead of \
+                         individual arguments",
+                        sugg,
+                        Applicability::MachineApplicable
+                    );
                 }
             }
         }

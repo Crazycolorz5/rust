@@ -25,12 +25,12 @@ use rustc::hir::def_id::{CrateNum, DefId, DefIndex,
 use rustc::ich::Fingerprint;
 use rustc::middle::lang_items;
 use rustc::mir::{self, interpret};
+use rustc::mir::interpret::AllocDecodingSession;
 use rustc::session::Session;
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::codec::TyDecoder;
 use rustc::mir::Mir;
 use rustc::util::captures::Captures;
-use rustc::util::nodemap::FxHashMap;
 
 use std::io;
 use std::mem;
@@ -55,11 +55,8 @@ pub struct DecodeContext<'a, 'tcx: 'a> {
 
     lazy_state: LazyState,
 
-    // interpreter allocation cache
-    interpret_alloc_cache: FxHashMap<usize, interpret::AllocId>,
-
-    // Read from the LazySeq CrateRoot::inpterpret_alloc_index on demand
-    interpret_alloc_index: Option<Vec<u32>>,
+    // Used for decoding interpret::AllocIds in a cached & thread-safe manner.
+    alloc_decoding_session: Option<AllocDecodingSession<'a>>,
 }
 
 /// Abstract over the various ways one can create metadata decoders.
@@ -78,8 +75,9 @@ pub trait Metadata<'a, 'tcx>: Copy {
             tcx,
             last_filemap_index: 0,
             lazy_state: LazyState::NoNode,
-            interpret_alloc_cache: FxHashMap::default(),
-            interpret_alloc_index: None,
+            alloc_decoding_session: self.cdata().map(|cdata| {
+                cdata.alloc_decoding_state.new_decoding_session()
+            }),
         }
     }
 }
@@ -177,17 +175,6 @@ impl<'a, 'tcx> DecodeContext<'a, 'tcx> {
         };
         self.lazy_state = LazyState::Previous(position + min_size);
         Ok(position)
-    }
-
-    fn interpret_alloc(&mut self, idx: usize) -> usize {
-        if let Some(index) = self.interpret_alloc_index.as_mut() {
-            return index[idx] as usize;
-        }
-        let cdata = self.cdata();
-        let index: Vec<u32> = cdata.root.interpret_alloc_index.decode(cdata).collect();
-        let pos = index[idx];
-        self.interpret_alloc_index = Some(index);
-        pos as usize
     }
 }
 
@@ -299,22 +286,11 @@ impl<'a, 'tcx> SpecializedDecoder<LocalDefId> for DecodeContext<'a, 'tcx> {
 
 impl<'a, 'tcx> SpecializedDecoder<interpret::AllocId> for DecodeContext<'a, 'tcx> {
     fn specialized_decode(&mut self) -> Result<interpret::AllocId, Self::Error> {
-        let tcx = self.tcx.unwrap();
-        let idx = usize::decode(self)?;
-
-        if let Some(cached) = self.interpret_alloc_cache.get(&idx).cloned() {
-            return Ok(cached);
+        if let Some(alloc_decoding_session) = self.alloc_decoding_session {
+            alloc_decoding_session.decode_alloc_id(self)
+        } else {
+            bug!("Attempting to decode interpret::AllocId without CrateMetadata")
         }
-        let pos = self.interpret_alloc(idx);
-        self.with_position(pos, |this| {
-            interpret::specialized_decode_alloc_id(
-                this,
-                tcx,
-                |this, alloc_id| {
-                    assert!(this.interpret_alloc_cache.insert(idx, alloc_id).is_none());
-                },
-            )
-        })
     }
 }
 
@@ -542,7 +518,7 @@ impl<'a, 'tcx> CrateMetadata {
                 let f = self.entry(index);
                 ty::FieldDef {
                     did: self.local_def_id(index),
-                    name: self.item_name(index).as_symbol(),
+                    ident: Ident::from_interned_str(self.item_name(index)),
                     vis: f.visibility.decode(self)
                 }
             }).collect(),
@@ -557,12 +533,14 @@ impl<'a, 'tcx> CrateMetadata {
                        -> &'tcx ty::AdtDef {
         let item = self.entry(item_id);
         let did = self.local_def_id(item_id);
-        let kind = match item.kind {
-            EntryKind::Enum(_) => ty::AdtKind::Enum,
-            EntryKind::Struct(_, _) => ty::AdtKind::Struct,
-            EntryKind::Union(_, _) => ty::AdtKind::Union,
+
+        let (kind, repr) = match item.kind {
+            EntryKind::Enum(repr) => (ty::AdtKind::Enum, repr),
+            EntryKind::Struct(_, repr) => (ty::AdtKind::Struct, repr),
+            EntryKind::Union(_, repr) => (ty::AdtKind::Union, repr),
             _ => bug!("get_adt_def called on a non-ADT {:?}", did),
         };
+
         let variants = if let ty::AdtKind::Enum = kind {
             item.children
                 .decode(self)
@@ -572,12 +550,6 @@ impl<'a, 'tcx> CrateMetadata {
                 .collect()
         } else {
             vec![self.get_variant(&item, item_id)]
-        };
-        let (kind, repr) = match item.kind {
-            EntryKind::Enum(repr) => (ty::AdtKind::Enum, repr),
-            EntryKind::Struct(_, repr) => (ty::AdtKind::Struct, repr),
-            EntryKind::Union(_, repr) => (ty::AdtKind::Union, repr),
-            _ => bug!("get_adt_def called on a non-ADT {:?}", did),
         };
 
         tcx.alloc_adt_def(did, kind, variants, repr)
@@ -880,34 +852,22 @@ impl<'a, 'tcx> CrateMetadata {
     }
 
     pub fn get_item_attrs(&self, node_id: DefIndex, sess: &Session) -> Lrc<[ast::Attribute]> {
-        let (node_as, node_index) =
-            (node_id.address_space().index(), node_id.as_array_index());
         if self.is_proc_macro(node_id) {
             return Lrc::new([]);
-        }
-
-        if let Some(&Some(ref val)) =
-            self.attribute_cache.borrow()[node_as].get(node_index) {
-            return val.clone();
         }
 
         // The attributes for a tuple struct are attached to the definition, not the ctor;
         // we assume that someone passing in a tuple struct ctor is actually wanting to
         // look at the definition
-        let mut item = self.entry(node_id);
         let def_key = self.def_key(node_id);
-        if def_key.disambiguated_data.data == DefPathData::StructCtor {
-            item = self.entry(def_key.parent.unwrap());
-        }
-        let result: Lrc<[ast::Attribute]> = Lrc::from(self.get_attributes(&item, sess));
-        let vec_ = &mut self.attribute_cache.borrow_mut()[node_as];
-        if vec_.len() < node_index + 1 {
-            vec_.resize(node_index + 1, None);
-        }
-        // This can overwrite the result produced by another thread, but the value
-        // written should be the same
-        vec_[node_index] = Some(result.clone());
-        result
+        let item_id = if def_key.disambiguated_data.data == DefPathData::StructCtor {
+            def_key.parent.unwrap()
+        } else {
+            node_id
+        };
+
+        let item = self.entry(item_id);
+        Lrc::from(self.get_attributes(&item, sess))
     }
 
     pub fn get_struct_field_names(&self, id: DefIndex) -> Vec<ast::Name> {

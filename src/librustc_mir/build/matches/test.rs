@@ -122,9 +122,10 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
 
         match *match_pair.pattern.kind {
             PatternKind::Constant { value } => {
+                let switch_ty = ty::ParamEnv::empty().and(switch_ty);
                 indices.entry(value)
                        .or_insert_with(|| {
-                           options.push(value.unwrap_bits(switch_ty));
+                           options.push(value.unwrap_bits(self.hir.tcx(), switch_ty));
                            options.len() - 1
                        });
                 true
@@ -312,7 +313,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                         },
                     }
                     let eq_def_id = self.hir.tcx().lang_items().eq_trait().unwrap();
-                    let (mty, method) = self.hir.trait_method(eq_def_id, "eq", ty, &[ty]);
+                    let (mty, method) = self.hir.trait_method(eq_def_id, "eq", ty, &[ty.into()]);
 
                     // take the argument by reference
                     let region_scope = self.topmost_scope();

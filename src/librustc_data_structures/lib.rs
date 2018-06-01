@@ -44,6 +44,7 @@ extern crate parking_lot;
 extern crate cfg_if;
 extern crate stable_deref_trait;
 extern crate rustc_rayon as rayon;
+extern crate rustc_hash;
 
 // See librustc_cratesio_shim/Cargo.toml for a comment explaining this.
 #[allow(unused_extern_crates)]
@@ -73,6 +74,8 @@ pub mod control_flow_graph;
 pub mod flock;
 pub mod sync;
 pub mod owning_ref;
+pub mod tiny_list;
+pub mod sorted_map;
 
 pub struct OnDrop<F: Fn()>(pub F);
 

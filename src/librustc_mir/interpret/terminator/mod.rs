@@ -4,7 +4,7 @@ use rustc::ty::layout::LayoutOf;
 use syntax::codemap::Span;
 use rustc_target::spec::abi::Abi;
 
-use rustc::mir::interpret::{EvalResult, PrimVal, Value};
+use rustc::mir::interpret::{EvalResult, Scalar, Value};
 use super::{EvalContext, Place, Machine, ValTy};
 
 use rustc_data_structures::indexed_vec::Idx;
@@ -38,13 +38,16 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 ..
             } => {
                 let discr_val = self.eval_operand(discr)?;
-                let discr_prim = self.value_to_primval(discr_val)?;
+                let discr_prim = self.value_to_scalar(discr_val)?;
+                let discr_layout = self.layout_of(discr_val.ty).unwrap();
+                trace!("SwitchInt({:?}, {:#?})", discr_prim, discr_layout);
+                let discr_prim = discr_prim.to_bits(discr_layout.size)?;
 
                 // Branch to the `otherwise` case by default, if no match is found.
                 let mut target_block = targets[targets.len() - 1];
 
                 for (index, &const_int) in values.iter().enumerate() {
-                    if discr_prim.to_bytes()? == const_int {
+                    if discr_prim == const_int {
                         target_block = targets[index];
                         break;
                     }
@@ -67,7 +70,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 let func = self.eval_operand(func)?;
                 let (fn_def, sig) = match func.ty.sty {
                     ty::TyFnPtr(sig) => {
-                        let fn_ptr = self.value_to_primval(func)?.to_ptr()?;
+                        let fn_ptr = self.value_to_scalar(func)?.to_ptr()?;
                         let instance = self.memory.get_fn(fn_ptr)?;
                         let instance_ty = instance.ty(*self.tcx);
                         match instance_ty.sty {
@@ -144,19 +147,19 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 target,
                 ..
             } => {
-                let cond_val = self.eval_operand_to_primval(cond)?.to_bool()?;
+                let cond_val = self.eval_operand_to_scalar(cond)?.to_bool()?;
                 if expected == cond_val {
                     self.goto_block(target);
                 } else {
                     use rustc::mir::interpret::EvalErrorKind::*;
                     return match *msg {
                         BoundsCheck { ref len, ref index } => {
-                            let len = self.eval_operand_to_primval(len)
+                            let len = self.eval_operand_to_scalar(len)
                                 .expect("can't eval len")
-                                .to_u64()?;
-                            let index = self.eval_operand_to_primval(index)
+                                .to_bits(self.memory().pointer_size())? as u64;
+                            let index = self.eval_operand_to_scalar(index)
                                 .expect("can't eval index")
-                                .to_u64()?;
+                                .to_bits(self.memory().pointer_size())? as u64;
                             err!(BoundsCheck { len, index })
                         }
                         Overflow(op) => Err(Overflow(op).into()),
@@ -288,10 +291,10 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                     // and need to pack arguments
                     Abi::Rust => {
                         trace!(
-                            "arg_locals: {:?}",
+                            "arg_locals: {:#?}",
                             self.frame().mir.args_iter().collect::<Vec<_>>()
                         );
-                        trace!("args: {:?}", args);
+                        trace!("args: {:#?}", args);
                         let local = arg_locals.nth(1).unwrap();
                         for (i, &valty) in args.into_iter().enumerate() {
                             let dest = self.eval_place(&mir::Place::Local(local).field(
@@ -318,10 +321,10 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 let mut arg_locals = self.frame().mir.args_iter();
                 trace!("ABI: {:?}", sig.abi);
                 trace!(
-                    "arg_locals: {:?}",
+                    "arg_locals: {:#?}",
                     self.frame().mir.args_iter().collect::<Vec<_>>()
                 );
-                trace!("args: {:?}", args);
+                trace!("args: {:#?}", args);
                 match sig.abi {
                     Abi::RustCall => {
                         assert_eq!(args.len(), 2);
@@ -341,8 +344,8 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                                     Value::ByRef(ptr, align) => {
                                         for (i, arg_local) in arg_locals.enumerate() {
                                             let field = layout.field(&self, i)?;
-                                            let offset = layout.fields.offset(i).bytes();
-                                            let arg = Value::ByRef(ptr.offset(offset, &self)?,
+                                            let offset = layout.fields.offset(i);
+                                            let arg = Value::ByRef(ptr.ptr_offset(offset, &self)?,
                                                                    align.min(field.align));
                                             let dest =
                                                 self.eval_place(&mir::Place::Local(arg_local))?;
@@ -359,7 +362,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                                             self.write_value(valty, dest)?;
                                         }
                                     }
-                                    Value::ByVal(PrimVal::Undef) => {}
+                                    Value::Scalar(Scalar::Bits { defined: 0, .. }) => {}
                                     other => {
                                         trace!("{:#?}, {:#?}", other, layout);
                                         let mut layout = layout;
@@ -373,14 +376,26 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                                             }
                                             break;
                                         }
-                                        let dest = self.eval_place(&mir::Place::Local(
-                                            arg_locals.next().unwrap(),
-                                        ))?;
-                                        let valty = ValTy {
-                                            value: other,
-                                            ty: layout.ty,
-                                        };
-                                        self.write_value(valty, dest)?;
+                                        {
+                                            let mut write_next = |value| {
+                                                let dest = self.eval_place(&mir::Place::Local(
+                                                    arg_locals.next().unwrap(),
+                                                ))?;
+                                                let valty = ValTy {
+                                                    value: Value::Scalar(value),
+                                                    ty: layout.ty,
+                                                };
+                                                self.write_value(valty, dest)
+                                            };
+                                            match other {
+                                                Value::Scalar(value) | Value::ScalarPair(value, _) => write_next(value)?,
+                                                _ => unreachable!(),
+                                            }
+                                            if let Value::ScalarPair(_, value) = other {
+                                                write_next(value)?;
+                                            }
+                                        }
+                                        assert!(arg_locals.next().is_none());
                                     }
                                 }
                             } else {

@@ -119,7 +119,7 @@ pub fn check_intrinsic_type<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             "pref_align_of" | "min_align_of" => (1, Vec::new(), tcx.types.usize),
             "size_of_val" |  "min_align_of_val" => {
                 (1, vec![
-                    tcx.mk_imm_ref(tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::new(1),
+                    tcx.mk_imm_ref(tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::INNERMOST,
                                                                   ty::BrAnon(0))),
                                     param(0))
                  ], tcx.types.usize)
@@ -298,7 +298,7 @@ pub fn check_intrinsic_type<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             "unlikely" => (0, vec![tcx.types.bool], tcx.types.bool),
 
             "discriminant_value" => (1, vec![
-                    tcx.mk_imm_ref(tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::new(1),
+                    tcx.mk_imm_ref(tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::INNERMOST,
                                                                   ty::BrAnon(0))),
                                    param(0))], tcx.types.u64),
 
@@ -313,11 +313,6 @@ pub fn check_intrinsic_type<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 ));
                 (0, vec![tcx.mk_fn_ptr(fn_ty), mut_u8, mut_u8], tcx.types.i32)
             }
-
-            "align_offset" => {
-                let ptr_ty = tcx.mk_imm_ptr(tcx.mk_nil());
-                (0, vec![ptr_ty, tcx.types.usize], tcx.types.usize)
-            },
 
             "nontemporal_store" => {
                 (1, vec![ tcx.mk_mut_ptr(param(0)), param(0) ], tcx.mk_nil())
@@ -356,8 +351,25 @@ pub fn check_platform_intrinsic_type<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         "simd_add" | "simd_sub" | "simd_mul" | "simd_rem" |
         "simd_div" | "simd_shl" | "simd_shr" |
         "simd_and" | "simd_or" | "simd_xor" |
-        "simd_fmin" | "simd_fmax" => {
+        "simd_fmin" | "simd_fmax" | "simd_fpow" => {
             (1, vec![param(0), param(0)], param(0))
+        }
+        "simd_fsqrt" | "simd_fsin" | "simd_fcos" | "simd_fexp" | "simd_fexp2" |
+        "simd_flog2" | "simd_flog10" | "simd_flog" |
+        "simd_fabs" | "simd_floor" | "simd_ceil" => {
+            (1, vec![param(0)], param(0))
+        }
+        "simd_fpowi" => {
+            (1, vec![param(0), tcx.types.i32], param(0))
+        }
+        "simd_fma" => {
+            (1, vec![param(0), param(0), param(0)], param(0))
+        }
+        "simd_gather" => {
+            (3, vec![param(0), param(1), param(2)], param(0))
+        }
+        "simd_scatter" => {
+            (3, vec![param(0), param(1), param(2)], tcx.mk_nil())
         }
         "simd_insert" => (2, vec![param(0), tcx.types.u32, param(1)], param(0)),
         "simd_extract" => (2, vec![param(0), tcx.types.u32], param(1)),

@@ -119,8 +119,8 @@ pub use core::slice::{SplitN, RSplitN, SplitNMut, RSplitNMut};
 pub use core::slice::{RSplit, RSplitMut};
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::slice::{from_raw_parts, from_raw_parts_mut};
-#[unstable(feature = "from_ref", issue = "45703")]
-pub use core::slice::{from_ref, from_ref_mut};
+#[stable(feature = "from_ref", since = "1.28.0")]
+pub use core::slice::{from_ref, from_mut};
 #[unstable(feature = "slice_get_slice", issue = "35729")]
 pub use core::slice::SliceIndex;
 #[unstable(feature = "exact_chunks", issue = "47115")]
@@ -566,15 +566,17 @@ impl<T: Clone, V: Borrow<[T]>> SliceConcatExt<T> for [V] {
     }
 
     fn join(&self, sep: &T) -> Vec<T> {
+        let mut iter = self.iter();
+        let first = match iter.next() {
+            Some(first) => first,
+            None => return vec![],
+        };
         let size = self.iter().fold(0, |acc, v| acc + v.borrow().len());
         let mut result = Vec::with_capacity(size + self.len());
-        let mut first = true;
-        for v in self {
-            if first {
-                first = false
-            } else {
-                result.push(sep.clone())
-            }
+        result.extend_from_slice(first.borrow());
+
+        for v in iter {
+            result.push(sep.clone());
             result.extend_from_slice(v.borrow())
         }
         result

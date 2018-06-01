@@ -481,8 +481,8 @@ fn convert_enum_variant_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // fill the discriminant values and field types
     for variant in variants {
         let wrapped_discr = prev_discr.map_or(initial, |d| d.wrap_incr(tcx));
-        prev_discr = Some(if let Some(e) = variant.node.disr_expr {
-            let expr_did = tcx.hir.local_def_id(e.node_id);
+        prev_discr = Some(if let Some(ref e) = variant.node.disr_expr {
+            let expr_did = tcx.hir.local_def_id(e.id);
             def.eval_explicit_discr(tcx, expr_did)
         } else if let Some(discr) = repr_type.disr_incr(tcx, prev_discr) {
             Some(discr)
@@ -520,21 +520,21 @@ fn convert_struct_variant<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let node_id = tcx.hir.as_local_node_id(did).unwrap();
     let fields = def.fields().iter().map(|f| {
         let fid = tcx.hir.local_def_id(f.id);
-        let dup_span = seen_fields.get(&f.name.to_ident()).cloned();
+        let dup_span = seen_fields.get(&f.ident.modern()).cloned();
         if let Some(prev_span) = dup_span {
             struct_span_err!(tcx.sess, f.span, E0124,
                              "field `{}` is already declared",
-                             f.name)
+                             f.ident)
                 .span_label(f.span, "field already declared")
-                .span_label(prev_span, format!("`{}` first declared here", f.name))
+                .span_label(prev_span, format!("`{}` first declared here", f.ident))
                 .emit();
         } else {
-            seen_fields.insert(f.name.to_ident(), f.span);
+            seen_fields.insert(f.ident.modern(), f.span);
         }
 
         ty::FieldDef {
             did: fid,
-            name: f.name,
+            ident: f.ident,
             vis: ty::Visibility::from_hir(&f.vis, node_id, tcx)
         }
     }).collect();
@@ -565,9 +565,9 @@ fn adt_def<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             let mut distance_from_explicit = 0;
             (AdtKind::Enum, def.variants.iter().map(|v| {
                 let did = tcx.hir.local_def_id(v.node.data.id());
-                let discr = if let Some(e) = v.node.disr_expr {
+                let discr = if let Some(ref e) = v.node.disr_expr {
                     distance_from_explicit = 0;
-                    ty::VariantDiscr::Explicit(tcx.hir.local_def_id(e.node_id))
+                    ty::VariantDiscr::Explicit(tcx.hir.local_def_id(e.id))
                 } else {
                     ty::VariantDiscr::Relative(distance_from_explicit)
                 };
@@ -689,7 +689,7 @@ fn has_late_bound_regions<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                     -> Option<Span> {
     struct LateBoundRegionsDetector<'a, 'tcx: 'a> {
         tcx: TyCtxt<'a, 'tcx, 'tcx>,
-        binder_depth: u32,
+        outer_index: ty::DebruijnIndex,
         has_late_bound_regions: Option<Span>,
     }
 
@@ -702,9 +702,9 @@ fn has_late_bound_regions<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             if self.has_late_bound_regions.is_some() { return }
             match ty.node {
                 hir::TyBareFn(..) => {
-                    self.binder_depth += 1;
+                    self.outer_index.shift_in(1);
                     intravisit::walk_ty(self, ty);
-                    self.binder_depth -= 1;
+                    self.outer_index.shift_out(1);
                 }
                 _ => intravisit::walk_ty(self, ty)
             }
@@ -714,9 +714,9 @@ fn has_late_bound_regions<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                 tr: &'tcx hir::PolyTraitRef,
                                 m: hir::TraitBoundModifier) {
             if self.has_late_bound_regions.is_some() { return }
-            self.binder_depth += 1;
+            self.outer_index.shift_in(1);
             intravisit::walk_poly_trait_ref(self, tr, m);
-            self.binder_depth -= 1;
+            self.outer_index.shift_out(1);
         }
 
         fn visit_lifetime(&mut self, lt: &'tcx hir::Lifetime) {
@@ -727,8 +727,13 @@ fn has_late_bound_regions<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 Some(rl::Region::Static) | Some(rl::Region::EarlyBound(..)) => {}
                 Some(rl::Region::LateBound(debruijn, _, _)) |
                 Some(rl::Region::LateBoundAnon(debruijn, _))
-                    if debruijn.depth < self.binder_depth => {}
-                _ => self.has_late_bound_regions = Some(lt.span),
+                    if debruijn < self.outer_index => {}
+                Some(rl::Region::LateBound(..)) |
+                Some(rl::Region::LateBoundAnon(..)) |
+                Some(rl::Region::Free(..)) |
+                None => {
+                    self.has_late_bound_regions = Some(lt.span);
+                }
             }
         }
     }
@@ -738,7 +743,9 @@ fn has_late_bound_regions<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                         decl: &'tcx hir::FnDecl)
                                         -> Option<Span> {
         let mut visitor = LateBoundRegionsDetector {
-            tcx, binder_depth: 1, has_late_bound_regions: None
+            tcx,
+            outer_index: ty::DebruijnIndex::INNERMOST,
+            has_late_bound_regions: None,
         };
         for lifetime in generics.lifetimes() {
             let hir_id = tcx.hir.node_to_hir_id(lifetime.lifetime.id);
@@ -845,11 +852,11 @@ fn generics_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                         name: keywords::SelfType.name().as_interned_str(),
                         def_id: tcx.hir.local_def_id(param_id),
                         pure_wrt_drop: false,
-                        kind: ty::GenericParamDefKind::Type(ty::TypeParamDef {
+                        kind: ty::GenericParamDefKind::Type {
                             has_default: false,
                             object_lifetime_default: rl::Set1::Empty,
                             synthetic: None,
-                        }),
+                        },
                     });
 
                     allow_defaults = true;
@@ -925,12 +932,12 @@ fn generics_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             name: p.name.as_interned_str(),
             def_id: tcx.hir.local_def_id(p.id),
             pure_wrt_drop: p.pure_wrt_drop,
-            kind: ty::GenericParamDefKind::Type(ty::TypeParamDef {
+            kind: ty::GenericParamDefKind::Type {
                 has_default: p.default.is_some(),
                 object_lifetime_default:
                     object_lifetime_defaults.as_ref().map_or(rl::Set1::Empty, |o| o[i]),
                 synthetic: p.synthetic,
-            }),
+            },
         }
     }));
 
@@ -950,11 +957,11 @@ fn generics_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 name: Symbol::intern(arg).as_interned_str(),
                 def_id,
                 pure_wrt_drop: false,
-                kind: ty::GenericParamDefKind::Type(ty::TypeParamDef {
+                kind: ty::GenericParamDefKind::Type {
                     has_default: false,
                     object_lifetime_default: rl::Set1::Empty,
                     synthetic: None,
-                }),
+                },
             });
         }
 
@@ -965,11 +972,11 @@ fn generics_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                     name: Symbol::intern("<upvar>").as_interned_str(),
                     def_id,
                     pure_wrt_drop: false,
-                    kind: ty::GenericParamDefKind::Type(ty::TypeParamDef {
+                    kind: ty::GenericParamDefKind::Type {
                         has_default: false,
                         object_lifetime_default: rl::Set1::Empty,
                         synthetic: None,
-                    }),
+                    },
                 }
             }));
         });
@@ -1102,20 +1109,20 @@ fn type_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             tcx.mk_closure(def_id, substs)
         }
 
-        NodeExpr(_) => match tcx.hir.get(tcx.hir.get_parent_node(node_id)) {
-            NodeTy(&hir::Ty { node: TyArray(_, body), .. }) |
-            NodeTy(&hir::Ty { node: TyTypeof(body), .. }) |
-            NodeExpr(&hir::Expr { node: ExprRepeat(_, body), .. })
-                if body.node_id == node_id => tcx.types.usize,
+        NodeAnonConst(_) => match tcx.hir.get(tcx.hir.get_parent_node(node_id)) {
+            NodeTy(&hir::Ty { node: TyArray(_, ref constant), .. }) |
+            NodeTy(&hir::Ty { node: TyTypeof(ref constant), .. }) |
+            NodeExpr(&hir::Expr { node: ExprRepeat(_, ref constant), .. })
+                if constant.id == node_id => tcx.types.usize,
 
-            NodeVariant(&Spanned { node: Variant_ { disr_expr: Some(e), .. }, .. })
-                if e.node_id == node_id => {
+            NodeVariant(&Spanned { node: Variant_ { disr_expr: Some(ref e), .. }, .. })
+                if e.id == node_id => {
                     tcx.adt_def(tcx.hir.get_parent_did(node_id))
                         .repr.discr_type().to_ty(tcx)
                 }
 
             x => {
-                bug!("unexpected expr parent in type_of_def_id(): {:?}", x);
+                bug!("unexpected const parent in type_of_def_id(): {:?}", x);
             }
         },
 

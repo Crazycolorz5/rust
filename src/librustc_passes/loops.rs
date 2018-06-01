@@ -82,13 +82,16 @@ impl<'a, 'hir> Visitor<'hir> for CheckLoopVisitor<'a, 'hir> {
             hir::ExprLoop(ref b, _, source) => {
                 self.with_context(Loop(LoopKind::Loop(source)), |v| v.visit_block(&b));
             }
-            hir::ExprClosure(.., b, _, _) => {
+            hir::ExprClosure(_, ref function_decl, b, _, _) => {
+                self.visit_fn_decl(&function_decl);
                 self.with_context(Closure, |v| v.visit_nested_body(b));
             }
             hir::ExprBlock(ref b, Some(_label)) => {
                 self.with_context(LabeledBlock, |v| v.visit_block(&b));
             }
             hir::ExprBreak(label, ref opt_expr) => {
+                opt_expr.as_ref().map(|e| self.visit_expr(e));
+
                 if self.require_label_in_labeled_block(e.span, &label, "break") {
                     // If we emitted an error about an unlabeled break in a labeled
                     // block, we don't need any further checking for this break any more

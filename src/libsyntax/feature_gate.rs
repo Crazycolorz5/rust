@@ -145,7 +145,7 @@ declare_features! (
     // rustc internal
     (active, rustc_diagnostic_macros, "1.0.0", None, None),
     (active, rustc_const_unstable, "1.0.0", None, None),
-    (active, box_syntax, "1.0.0", Some(27779), None),
+    (active, box_syntax, "1.0.0", Some(49733), None),
     (active, unboxed_closures, "1.0.0", Some(29625), None),
 
     (active, fundamental, "1.0.0", Some(29635), None),
@@ -214,6 +214,9 @@ declare_features! (
     // Allows the definition of `const fn` functions.
     (active, const_fn, "1.2.0", Some(24111), None),
 
+    // Allows let bindings and destructuring in `const fn` functions and constants.
+    (active, const_let, "1.22.1", Some(48821), None),
+
     // Allows using #[prelude_import] on glob `use` items.
     //
     // rustc internal
@@ -232,7 +235,7 @@ declare_features! (
     (active, platform_intrinsics, "1.4.0", Some(27731), None),
 
     // allow `#[unwind(..)]`
-    // rust runtime internal
+    // rustc internal for rust runtime
     (active, unwind_attributes, "1.4.0", None, None),
 
     // allow the use of `#[naked]` on functions.
@@ -273,7 +276,7 @@ declare_features! (
     (active, never_type, "1.13.0", Some(35121), None),
 
     // Allows exhaustive pattern matching on types that contain uninhabited types.
-    (active, exhaustive_patterns, "1.13.0", None, None),
+    (active, exhaustive_patterns, "1.13.0", Some(51085), None),
 
     // Allows all literals in attribute lists and values of key-value pairs.
     (active, attr_literals, "1.13.0", Some(34981), None),
@@ -291,12 +294,13 @@ declare_features! (
     (active, use_extern_macros, "1.15.0", Some(35896), None),
 
     // `extern "ptx-*" fn()`
-    (active, abi_ptx, "1.15.0", None, None),
+    (active, abi_ptx, "1.15.0", Some(38788), None),
 
     // The `repr(i128)` annotation for enums
     (active, repr128, "1.16.0", Some(35118), None),
 
     // The `unadjusted` ABI. Perma unstable.
+    // rustc internal
     (active, abi_unadjusted, "1.16.0", None, None),
 
     // Procedural macros 2.0.
@@ -348,13 +352,14 @@ declare_features! (
     (active, unsized_tuple_coercion, "1.20.0", Some(42877), None),
 
     // Generators
-    (active, generators, "1.21.0", None, None),
+    (active, generators, "1.21.0", Some(43122), None),
 
     // Trait aliases
     (active, trait_alias, "1.24.0", Some(41517), None),
 
     // global allocators and their internals
-    (active, global_allocator, "1.20.0", None, None),
+    (active, global_allocator, "1.20.0", Some(27389), None),
+    // rustc internal
     (active, allocator_internals, "1.20.0", None, None),
 
     // #[doc(cfg(...))]
@@ -412,7 +417,7 @@ declare_features! (
     (active, if_while_or_patterns, "1.26.0", Some(48215), None),
 
     // Parentheses in patterns
-    (active, pattern_parentheses, "1.26.0", None, None),
+    (active, pattern_parentheses, "1.26.0", Some(51087), None),
 
     // Allows `#[repr(packed)]` attribute on structs
     (active, repr_packed, "1.26.0", Some(33158), None),
@@ -421,10 +426,10 @@ declare_features! (
     (active, underscore_imports, "1.26.0", Some(48216), None),
 
     // The #[wasm_custom_section] attribute
-    (active, wasm_custom_section, "1.26.0", None, None),
+    (active, wasm_custom_section, "1.26.0", Some(51088), None),
 
     // The #![wasm_import_module] attribute
-    (active, wasm_import_module, "1.26.0", None, None),
+    (active, wasm_import_module, "1.26.0", Some(51088), None),
 
     // Allows keywords to be escaped for use as identifiers
     (active, raw_identifiers, "1.26.0", Some(48589), None),
@@ -433,24 +438,25 @@ declare_features! (
     (active, macros_in_extern, "1.27.0", Some(49476), None),
 
     // unstable #[target_feature] directives
-    (active, arm_target_feature, "1.27.0", None, None),
-    (active, aarch64_target_feature, "1.27.0", None, None),
-    (active, hexagon_target_feature, "1.27.0", None, None),
-    (active, powerpc_target_feature, "1.27.0", None, None),
-    (active, mips_target_feature, "1.27.0", None, None),
-    (active, avx512_target_feature, "1.27.0", None, None),
-    (active, mmx_target_feature, "1.27.0", None, None),
-    (active, sse4a_target_feature, "1.27.0", None, None),
-    (active, tbm_target_feature, "1.27.0", None, None),
+    (active, arm_target_feature, "1.27.0", Some(44839), None),
+    (active, aarch64_target_feature, "1.27.0", Some(44839), None),
+    (active, hexagon_target_feature, "1.27.0", Some(44839), None),
+    (active, powerpc_target_feature, "1.27.0", Some(44839), None),
+    (active, mips_target_feature, "1.27.0", Some(44839), None),
+    (active, avx512_target_feature, "1.27.0", Some(44839), None),
+    (active, mmx_target_feature, "1.27.0", Some(44839), None),
+    (active, sse4a_target_feature, "1.27.0", Some(44839), None),
+    (active, tbm_target_feature, "1.27.0", Some(44839), None),
 
     // Allows macro invocations of the form `#[foo::bar]`
-    (active, proc_macro_path_invoc, "1.27.0", None, None),
+    (active, proc_macro_path_invoc, "1.27.0", Some(38356), None),
 
     // Allows macro invocations on modules expressions and statements and
     // procedural macros to expand to non-items.
-    (active, proc_macro_mod, "1.27.0", None, None),
-    (active, proc_macro_expr, "1.27.0", None, None),
-    (active, proc_macro_non_items, "1.27.0", None, None),
+    (active, proc_macro_mod, "1.27.0", Some(38356), None),
+    (active, proc_macro_expr, "1.27.0", Some(38356), None),
+    (active, proc_macro_non_items, "1.27.0", Some(38356), None),
+    (active, proc_macro_gen, "1.27.0", Some(38356), None),
 
     // #[doc(alias = "...")]
     (active, doc_alias, "1.27.0", Some(50146), None),
@@ -791,6 +797,12 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                                 attribute is an experimental \
                                                 feature",
                                                cfg_fn!(needs_panic_runtime))),
+    ("rustc_outlives", Normal, Gated(Stability::Unstable,
+                                     "rustc_attrs",
+                                     "the `#[rustc_outlives]` attribute \
+                                      is just used for rustc unit tests \
+                                      and will never be stable",
+                                     cfg_fn!(rustc_attrs))),
     ("rustc_variance", Normal, Gated(Stability::Unstable,
                                      "rustc_attrs",
                                      "the `#[rustc_variance]` attribute \
@@ -845,11 +857,6 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                                        is just used for rustc unit tests \
                                                        and will never be stable",
                                                       cfg_fn!(rustc_attrs))),
-    ("rustc_serialize_exclude_null", Normal, Gated(Stability::Unstable,
-                                             "rustc_attrs",
-                                             "the `#[rustc_serialize_exclude_null]` attribute \
-                                              is an internal-only feature",
-                                             cfg_fn!(rustc_attrs))),
     ("rustc_synthetic", Whitelisted, Gated(Stability::Unstable,
                                                       "rustc_attrs",
                                                       "this attribute \
@@ -1684,6 +1691,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             ast::ExprKind::Type(..) => {
                 gate_feature_post!(&self, type_ascription, e.span,
                                   "type ascription is experimental");
+            }
+            ast::ExprKind::ObsoleteInPlace(..) => {
+                // these get a hard error in ast-validation
             }
             ast::ExprKind::Yield(..) => {
                 gate_feature_post!(&self, generators,

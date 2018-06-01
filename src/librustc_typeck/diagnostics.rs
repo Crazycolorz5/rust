@@ -4519,6 +4519,32 @@ impl Foo for () {
 ```
 "##,
 
+E0646: r##"
+It is not possible to define `main` with a where clause.
+Erroneous code example:
+
+```compile_fail,E0646
+fn main() where i32: Copy { // error: main function is not allowed to have
+                            // a where clause
+}
+```
+"##,
+
+E0647: r##"
+It is not possible to define `start` with a where clause.
+Erroneous code example:
+
+```compile_fail,E0647
+#![feature(start)]
+
+#[start]
+fn start(_: isize, _: *const *const u8) -> isize where (): Copy {
+    //^ error: start function is not allowed to have a where clause
+    0
+}
+```
+"##,
+
 E0689: r##"
 This error indicates that the numeric value for the method being passed exists
 but the type of the numeric value or binding could not be identified.
@@ -4526,23 +4552,25 @@ but the type of the numeric value or binding could not be identified.
 The error happens on numeric literals:
 
 ```compile_fail,E0689
-2.0.recip();
+2.0.neg();
 ```
 
 and on numeric bindings without an identified concrete type:
 
 ```compile_fail,E0689
 let x = 2.0;
-x.recip();  // same error as above
+x.neg();  // same error as above
 ```
 
 Because of this, you must give the numeric literal or binding a type:
 
 ```
-let _ = 2.0_f32.recip();
+use std::ops::Neg;
+
+let _ = 2.0_f32.neg();
 let x: f32 = 2.0;
-let _ = x.recip();
-let _ = (2.0 as f32).recip();
+let _ = x.neg();
+let _ = (2.0 as f32).neg();
 ```
 "##,
 

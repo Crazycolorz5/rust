@@ -114,15 +114,15 @@ pub enum CandidateSource {
 impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     /// Determines whether the type `self_ty` supports a method name `method_name` or not.
     pub fn method_exists(&self,
-                         span: Span,
-                         method_name: ast::Name,
+                         method_name: ast::Ident,
                          self_ty: Ty<'tcx>,
                          call_expr_id: ast::NodeId,
                          allow_private: bool)
                          -> bool {
         let mode = probe::Mode::MethodCall;
-        match self.probe_for_name(span, mode, method_name, IsSuggestion(false),
-                                  self_ty, call_expr_id, ProbeScope::TraitsInScope) {
+        match self.probe_for_name(method_name.span, mode, method_name.name,
+                                  IsSuggestion(false), self_ty, call_expr_id,
+                                  ProbeScope::TraitsInScope) {
             Ok(..) => true,
             Err(NoMatch(..)) => false,
             Err(Ambiguity(..)) => true,
@@ -179,12 +179,14 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
         self.tcx.check_stability(pick.item.def_id, Some(call_expr.id), span);
 
-        let result = self.confirm_method(span,
-                                         self_expr,
-                                         call_expr,
-                                         self_ty,
-                                         pick.clone(),
-                                         segment);
+        let result = self.confirm_method(
+            span,
+            self_expr,
+            call_expr,
+            self_ty,
+            pick.clone(),
+            segment,
+        );
 
         if result.illegal_sized_bound {
             // We probe again, taking all traits into account (not only those in scope).
@@ -257,7 +259,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         let substs = Substs::for_item(self.tcx, trait_def_id, |param, _| {
             match param.kind {
                 GenericParamDefKind::Lifetime => {}
-                GenericParamDefKind::Type(_) => {
+                GenericParamDefKind::Type {..} => {
                     if param.index == 0 {
                         return self_ty.into();
                     } else if let Some(ref input_types) = opt_input_types {

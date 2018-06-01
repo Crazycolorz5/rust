@@ -99,7 +99,7 @@ pub struct FunctionCx<'a, 'tcx:'a> {
     locals: IndexVec<mir::Local, LocalRef<'tcx>>,
 
     /// Debug information for MIR scopes.
-    scopes: IndexVec<mir::VisibilityScope, debuginfo::MirDebugScope>,
+    scopes: IndexVec<mir::SourceScope, debuginfo::MirDebugScope>,
 
     /// If this function is being monomorphized, this contains the type substitutions used.
     param_substs: &'tcx Substs<'tcx>,
@@ -158,9 +158,9 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
 
     // DILocations inherit source file name from the parent DIScope.  Due to macro expansions
     // it may so happen that the current span belongs to a different file than the DIScope
-    // corresponding to span's containing visibility scope.  If so, we need to create a DIScope
+    // corresponding to span's containing source scope.  If so, we need to create a DIScope
     // "extension" into that file.
-    fn scope_metadata_for_loc(&self, scope_id: mir::VisibilityScope, pos: BytePos)
+    fn scope_metadata_for_loc(&self, scope_id: mir::SourceScope, pos: BytePos)
                                -> llvm::debuginfo::DIScope {
         let scope_metadata = self.scopes[scope_id].scope_metadata;
         if pos < self.scopes[scope_id].file_start_pos ||
@@ -265,7 +265,7 @@ pub fn codegen_mir<'a, 'tcx: 'a>(
 
             if let Some(name) = decl.name {
                 // User variable
-                let debug_scope = fx.scopes[decl.source_info.scope];
+                let debug_scope = fx.scopes[decl.visibility_scope];
                 let dbg = debug_scope.is_valid() && bx.sess().opts.debuginfo == FullDebugInfo;
 
                 if !memory_locals.contains(local.index()) && !dbg {
@@ -276,7 +276,10 @@ pub fn codegen_mir<'a, 'tcx: 'a>(
                 debug!("alloc: {:?} ({}) -> place", local, name);
                 let place = PlaceRef::alloca(&bx, layout, &name.as_str());
                 if dbg {
-                    let (scope, span) = fx.debug_loc(decl.source_info);
+                    let (scope, span) = fx.debug_loc(mir::SourceInfo {
+                        span: decl.source_info.span,
+                        scope: decl.visibility_scope,
+                    });
                     declare_local(&bx, &fx.debug_context, name, layout.ty, scope,
                         VariableAccess::DirectVariable { alloca: place.llval },
                         VariableKind::LocalVariable, span);
@@ -411,7 +414,7 @@ fn create_funclets<'a, 'tcx>(
 /// indirect.
 fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
                             fx: &FunctionCx<'a, 'tcx>,
-                            scopes: &IndexVec<mir::VisibilityScope, debuginfo::MirDebugScope>,
+                            scopes: &IndexVec<mir::SourceScope, debuginfo::MirDebugScope>,
                             memory_locals: &BitVector)
                             -> Vec<LocalRef<'tcx>> {
     let mir = fx.mir;
@@ -420,7 +423,7 @@ fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
     let mut llarg_idx = fx.fn_ty.ret.is_indirect() as usize;
 
     // Get the argument scope, if it exists and if we need it.
-    let arg_scope = scopes[mir::ARGUMENT_VISIBILITY_SCOPE];
+    let arg_scope = scopes[mir::OUTERMOST_SOURCE_SCOPE];
     let arg_scope = if arg_scope.is_valid() && bx.sess().opts.debuginfo == FullDebugInfo {
         Some(arg_scope.scope_metadata)
     } else {
@@ -583,23 +586,6 @@ fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
             };
             let upvar_tys = upvar_substs.upvar_tys(def_id, tcx);
 
-            // Store the pointer to closure data in an alloca for debuginfo
-            // because that's what the llvm.dbg.declare intrinsic expects.
-
-            // FIXME(eddyb) this shouldn't be necessary but SROA seems to
-            // mishandle DW_OP_plus not preceded by DW_OP_deref, i.e. it
-            // doesn't actually strip the offset when splitting the closure
-            // environment into its components so it ends up out of bounds.
-            let env_ptr = if !env_ref {
-                let scratch = PlaceRef::alloca(bx,
-                    bx.cx.layout_of(tcx.mk_mut_ptr(arg.layout.ty)),
-                    "__debuginfo_env_ptr");
-                bx.store(place.llval, scratch.llval, scratch.align);
-                scratch.llval
-            } else {
-                place.llval
-            };
-
             for (i, (decl, ty)) in mir.upvar_decls.iter().zip(upvar_tys).enumerate() {
                 let byte_offset_of_var_in_env = closure_layout.fields.offset(i).bytes();
 
@@ -611,10 +597,7 @@ fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
                 };
 
                 // The environment and the capture can each be indirect.
-
-                // FIXME(eddyb) see above why we have to keep
-                // a pointer in an alloca for debuginfo atm.
-                let mut ops = if env_ref || true { &ops[..] } else { &ops[1..] };
+                let mut ops = if env_ref { &ops[..] } else { &ops[1..] };
 
                 let ty = if let (true, &ty::TyRef(_, ty, _)) = (decl.by_ref, &ty.sty) {
                     ty
@@ -624,7 +607,7 @@ fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
                 };
 
                 let variable_access = VariableAccess::IndirectVariable {
-                    alloca: env_ptr,
+                    alloca: place.llval,
                     address_operations: &ops
                 };
                 declare_local(
@@ -634,7 +617,7 @@ fn arg_local_refs<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
                     ty,
                     scope,
                     variable_access,
-                    VariableKind::CapturedVariable,
+                    VariableKind::LocalVariable,
                     DUMMY_SP
                 );
             }

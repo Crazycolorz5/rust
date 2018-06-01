@@ -9,7 +9,9 @@
 // except according to those terms.
 
 use borrow_check::borrow_set::BorrowSet;
-use borrow_check::location::LocationTable;
+use borrow_check::location::{LocationIndex, LocationTable};
+use borrow_check::nll::facts::AllFactsExt;
+use dataflow::indexes::BorrowIndex;
 use dataflow::move_paths::MoveData;
 use dataflow::FlowAtLocation;
 use dataflow::MaybeInitializedPlaces;
@@ -22,16 +24,19 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::io;
 use std::path::PathBuf;
+use std::rc::Rc;
 use transform::MirSource;
 use util::liveness::{LivenessResults, LocalSet};
 
 use self::mir_util::PassWhere;
+use polonius_engine::{Algorithm, Output};
 use util as mir_util;
 use util::pretty::{self, ALIGN};
 
 mod constraint_generation;
 pub mod explain_borrow;
 mod facts;
+mod invalidation;
 crate mod region_infer;
 mod renumber;
 mod subtype_constraint_generation;
@@ -81,6 +86,7 @@ pub(in borrow_check) fn compute_regions<'cx, 'gcx, 'tcx>(
     borrow_set: &BorrowSet<'tcx>,
 ) -> (
     RegionInferenceContext<'tcx>,
+    Option<Rc<Output<RegionVid, BorrowIndex, LocationIndex>>>,
     Option<ClosureRegionRequirements<'gcx>>,
 ) {
     // Run the MIR type-checker.
@@ -96,7 +102,9 @@ pub(in borrow_check) fn compute_regions<'cx, 'gcx, 'tcx>(
         move_data,
     );
 
-    let mut all_facts = if infcx.tcx.sess.opts.debugging_opts.nll_facts {
+    let mut all_facts = if infcx.tcx.sess.opts.debugging_opts.nll_facts
+        || infcx.tcx.sess.opts.debugging_opts.polonius
+    {
         Some(AllFacts::default())
     } else {
         None
@@ -111,8 +119,7 @@ pub(in borrow_check) fn compute_regions<'cx, 'gcx, 'tcx>(
     // Create the region inference context, taking ownership of the region inference
     // data that was contained in `infcx`.
     let var_origins = infcx.take_region_var_origins();
-    let mut regioncx =
-        RegionInferenceContext::new(var_origins, universal_regions, mir);
+    let mut regioncx = RegionInferenceContext::new(var_origins, universal_regions, mir);
 
     // Generate various constraints.
     subtype_constraint_generation::generate(
@@ -130,13 +137,34 @@ pub(in borrow_check) fn compute_regions<'cx, 'gcx, 'tcx>(
         &mir,
         borrow_set,
     );
+    invalidation::generate_invalidates(
+        infcx,
+        &mut all_facts,
+        location_table,
+        &mir,
+        def_id,
+        borrow_set,
+    );
 
     // Dump facts if requested.
-    if let Some(all_facts) = all_facts {
-        let def_path = infcx.tcx.hir.def_path(def_id);
-        let dir_path = PathBuf::from("nll-facts").join(def_path.to_filename_friendly_no_crate());
-        all_facts.write_to_dir(dir_path, location_table).unwrap();
-    }
+    let polonius_output = all_facts.and_then(|all_facts| {
+        if infcx.tcx.sess.opts.debugging_opts.nll_facts {
+            let def_path = infcx.tcx.hir.def_path(def_id);
+            let dir_path =
+                PathBuf::from("nll-facts").join(def_path.to_filename_friendly_no_crate());
+            all_facts.write_to_dir(dir_path, location_table).unwrap();
+        }
+
+        if infcx.tcx.sess.opts.debugging_opts.polonius {
+            Some(Rc::new(Output::compute(
+                &all_facts,
+                Algorithm::DatafrogOpt,
+                false,
+            )))
+        } else {
+            None
+        }
+    });
 
     // Solve the region constraints.
     let closure_region_requirements = regioncx.solve(infcx, &mir, def_id);
@@ -156,7 +184,7 @@ pub(in borrow_check) fn compute_regions<'cx, 'gcx, 'tcx>(
     // information
     dump_annotation(infcx, &mir, def_id, &regioncx, &closure_region_requirements);
 
-    (regioncx, closure_region_requirements)
+    (regioncx, polonius_output, closure_region_requirements)
 }
 
 fn dump_mir_results<'a, 'gcx, 'tcx>(
@@ -171,7 +199,8 @@ fn dump_mir_results<'a, 'gcx, 'tcx>(
         return;
     }
 
-    let regular_liveness_per_location: FxHashMap<_, _> = mir.basic_blocks()
+    let regular_liveness_per_location: FxHashMap<_, _> = mir
+        .basic_blocks()
         .indices()
         .flat_map(|bb| {
             let mut results = vec![];
@@ -184,7 +213,8 @@ fn dump_mir_results<'a, 'gcx, 'tcx>(
         })
         .collect();
 
-    let drop_liveness_per_location: FxHashMap<_, _> = mir.basic_blocks()
+    let drop_liveness_per_location: FxHashMap<_, _> = mir
+        .basic_blocks()
         .indices()
         .flat_map(|bb| {
             let mut results = vec![];
@@ -197,47 +227,55 @@ fn dump_mir_results<'a, 'gcx, 'tcx>(
         })
         .collect();
 
-    mir_util::dump_mir(infcx.tcx, None, "nll", &0, source, mir, |pass_where, out| {
-        match pass_where {
-            // Before the CFG, dump out the values for each region variable.
-            PassWhere::BeforeCFG => {
-                regioncx.dump_mir(out)?;
+    mir_util::dump_mir(
+        infcx.tcx,
+        None,
+        "nll",
+        &0,
+        source,
+        mir,
+        |pass_where, out| {
+            match pass_where {
+                // Before the CFG, dump out the values for each region variable.
+                PassWhere::BeforeCFG => {
+                    regioncx.dump_mir(out)?;
 
-                if let Some(closure_region_requirements) = closure_region_requirements {
-                    writeln!(out, "|")?;
-                    writeln!(out, "| Free Region Constraints")?;
-                    for_each_region_constraint(closure_region_requirements, &mut |msg| {
-                        writeln!(out, "| {}", msg)
-                    })?;
+                    if let Some(closure_region_requirements) = closure_region_requirements {
+                        writeln!(out, "|")?;
+                        writeln!(out, "| Free Region Constraints")?;
+                        for_each_region_constraint(closure_region_requirements, &mut |msg| {
+                            writeln!(out, "| {}", msg)
+                        })?;
+                    }
                 }
-            }
 
-            // Before each basic block, dump out the values
-            // that are live on entry to the basic block.
-            PassWhere::BeforeBlock(bb) => {
-                let s = live_variable_set(&liveness.regular.ins[bb], &liveness.drop.ins[bb]);
-                writeln!(out, "    | Live variables on entry to {:?}: {}", bb, s)?;
-            }
+                // Before each basic block, dump out the values
+                // that are live on entry to the basic block.
+                PassWhere::BeforeBlock(bb) => {
+                    let s = live_variable_set(&liveness.regular.ins[bb], &liveness.drop.ins[bb]);
+                    writeln!(out, "    | Live variables on entry to {:?}: {}", bb, s)?;
+                }
 
-            PassWhere::BeforeLocation(location) => {
-                let s = live_variable_set(
-                    &regular_liveness_per_location[&location],
-                    &drop_liveness_per_location[&location],
-                );
-                writeln!(
-                    out,
-                    "{:ALIGN$} | Live variables on entry to {:?}: {}",
-                    "",
-                    location,
-                    s,
-                    ALIGN = ALIGN
-                )?;
-            }
+                PassWhere::BeforeLocation(location) => {
+                    let s = live_variable_set(
+                        &regular_liveness_per_location[&location],
+                        &drop_liveness_per_location[&location],
+                    );
+                    writeln!(
+                        out,
+                        "{:ALIGN$} | Live variables on entry to {:?}: {}",
+                        "",
+                        location,
+                        s,
+                        ALIGN = ALIGN
+                    )?;
+                }
 
-            PassWhere::AfterLocation(_) | PassWhere::AfterCFG => {}
-        }
-        Ok(())
-    });
+                PassWhere::AfterLocation(_) | PassWhere::AfterCFG => {}
+            }
+            Ok(())
+        },
+    );
 
     // Also dump the inference graph constraints as a graphviz file.
     let _: io::Result<()> = do catch {
@@ -268,7 +306,8 @@ fn dump_annotation<'a, 'gcx, 'tcx>(
     // better.
 
     if let Some(closure_region_requirements) = closure_region_requirements {
-        let mut err = tcx.sess
+        let mut err = tcx
+            .sess
             .diagnostic()
             .span_note_diag(mir.span, "External requirements");
 
@@ -288,7 +327,8 @@ fn dump_annotation<'a, 'gcx, 'tcx>(
 
         err.emit();
     } else {
-        let mut err = tcx.sess
+        let mut err = tcx
+            .sess
             .diagnostic()
             .span_note_diag(mir.span, "No external requirements");
         regioncx.annotate(&mut err);
@@ -307,8 +347,7 @@ fn for_each_region_constraint(
         };
         with_msg(&format!(
             "where {:?}: {:?}",
-            subject,
-            req.outlived_free_region,
+            subject, req.outlived_free_region,
         ))?;
     }
     Ok(())

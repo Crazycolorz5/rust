@@ -290,9 +290,8 @@ impl PrintContext {
                     DefPathData::LifetimeDef(_) |
                     DefPathData::Field(_) |
                     DefPathData::StructCtor |
-                    DefPathData::Initializer |
+                    DefPathData::AnonConst |
                     DefPathData::ImplTrait |
-                    DefPathData::Typeof |
                     DefPathData::GlobalMetaData(_) => {
                         // if we're making a symbol for something, there ought
                         // to be a value or type-def or something in there
@@ -338,7 +337,9 @@ impl PrintContext {
                 let mut type_params =
                     generics.params.iter().rev().filter_map(|param| {
                         match param.kind {
-                            GenericParamDefKind::Type(ty) => Some((param.def_id, ty.has_default)),
+                            GenericParamDefKind::Type { has_default, .. } => {
+                                Some((param.def_id, has_default))
+                            }
                             GenericParamDefKind::Lifetime => None,
                         }
                     }).peekable();
@@ -525,7 +526,7 @@ impl PrintContext {
                     ty::BrNamed(tcx.hir.local_def_id(CRATE_NODE_ID), name)
                 }
             };
-            tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::new(1), br))
+            tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::INNERMOST, br))
         }).0;
         start_or_continue(f, "", "> ")?;
 
@@ -605,7 +606,7 @@ impl fmt::Debug for ty::GenericParamDef {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let type_name = match self.kind {
             ty::GenericParamDefKind::Lifetime => "Lifetime",
-            ty::GenericParamDefKind::Type(_) => "Type",
+            ty::GenericParamDefKind::Type {..} => "Type",
         };
         write!(f, "{}({}, {:?}, {})",
                type_name,
