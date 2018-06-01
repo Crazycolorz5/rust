@@ -27,7 +27,7 @@ declare_lint! {
 
 declare_lint! {
     pub CONST_ERR,
-    Deny,
+    Warn,
     "constant evaluation detected erroneous expression"
 }
 
@@ -177,6 +177,12 @@ declare_lint! {
 }
 
 declare_lint! {
+    pub LEGACY_IMPORTS,
+    Deny,
+    "detects names that resolve to ambiguous glob imports with RFC 1560"
+}
+
+declare_lint! {
     pub LEGACY_CONSTRUCTOR_VISIBILITY,
     Deny,
     "detects use of struct constructors that would be invisible with new visibility rules"
@@ -225,13 +231,13 @@ declare_lint! {
 }
 
 declare_lint! {
-    pub SINGLE_USE_LIFETIMES,
+    pub SINGLE_USE_LIFETIME,
     Allow,
     "detects lifetime parameters that are only used once"
 }
 
 declare_lint! {
-    pub UNUSED_LIFETIMES,
+    pub UNUSED_LIFETIME,
     Allow,
     "detects lifetime parameters that are never used"
 }
@@ -243,19 +249,19 @@ declare_lint! {
 }
 
 declare_lint! {
-    pub ELIDED_LIFETIMES_IN_PATHS,
+    pub ELIDED_LIFETIME_IN_PATH,
     Allow,
     "hidden lifetime parameters are deprecated, try `Foo<'_>`"
 }
 
 declare_lint! {
-    pub BARE_TRAIT_OBJECTS,
+    pub BARE_TRAIT_OBJECT,
     Allow,
     "suggest using `dyn Trait` for trait objects"
 }
 
 declare_lint! {
-    pub ABSOLUTE_PATHS_NOT_STARTING_WITH_CRATE,
+    pub ABSOLUTE_PATH_NOT_STARTING_WITH_CRATE,
     Allow,
     "fully qualified paths that start with a module name \
      instead of `crate`, `self`, or an extern crate name"
@@ -268,21 +274,9 @@ declare_lint! {
 }
 
 declare_lint! {
-    pub UNSTABLE_NAME_COLLISIONS,
+    pub UNSTABLE_NAME_COLLISION,
     Warn,
     "detects name collision with an existing but unstable method"
-}
-
-declare_lint! {
-    pub UNUSED_LABELS,
-    Allow,
-    "detects labels that are never used"
-}
-
-declare_lint! {
-    pub DUPLICATE_ASSOCIATED_TYPE_BINDINGS,
-    Warn,
-    "warns about duplicate associated type bindings in generics"
 }
 
 /// Does nothing as a lint pass, but registers some `Lint`s
@@ -320,6 +314,7 @@ impl LintPass for HardwiredLints {
             SAFE_PACKED_BORROWS,
             PATTERNS_IN_FNS_WITHOUT_BODY,
             LEGACY_DIRECTORY_OWNERSHIP,
+            LEGACY_IMPORTS,
             LEGACY_CONSTRUCTOR_VISIBILITY,
             MISSING_FRAGMENT_SPECIFIER,
             PARENTHESIZED_PARAMS_IN_TYPES_AND_MODULES,
@@ -328,15 +323,13 @@ impl LintPass for HardwiredLints {
             DEPRECATED,
             UNUSED_UNSAFE,
             UNUSED_MUT,
-            SINGLE_USE_LIFETIMES,
-            UNUSED_LIFETIMES,
-            UNUSED_LABELS,
+            SINGLE_USE_LIFETIME,
+            UNUSED_LIFETIME,
             TYVAR_BEHIND_RAW_POINTER,
-            ELIDED_LIFETIMES_IN_PATHS,
-            BARE_TRAIT_OBJECTS,
-            ABSOLUTE_PATHS_NOT_STARTING_WITH_CRATE,
-            UNSTABLE_NAME_COLLISIONS,
-            DUPLICATE_ASSOCIATED_TYPE_BINDINGS,
+            ELIDED_LIFETIME_IN_PATH,
+            BARE_TRAIT_OBJECT,
+            ABSOLUTE_PATH_NOT_STARTING_WITH_CRATE,
+            UNSTABLE_NAME_COLLISION,
         )
     }
 }

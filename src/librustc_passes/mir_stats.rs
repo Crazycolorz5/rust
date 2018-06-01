@@ -17,7 +17,7 @@ use rustc::mir::{Constant, Literal, Location, Local, LocalDecl};
 use rustc::mir::{Place, PlaceElem, PlaceProjection};
 use rustc::mir::{Mir, Operand, ProjectionElem};
 use rustc::mir::{Rvalue, SourceInfo, Statement, StatementKind};
-use rustc::mir::{Terminator, TerminatorKind, SourceScope, SourceScopeData};
+use rustc::mir::{Terminator, TerminatorKind, VisibilityScope, VisibilityScopeData};
 use rustc::mir::interpret::EvalErrorKind;
 use rustc::mir::visit as mir_visit;
 use rustc::ty::{self, ClosureSubsts, TyCtxt};
@@ -72,10 +72,10 @@ impl<'a, 'tcx> mir_visit::Visitor<'tcx> for StatCollector<'a, 'tcx> {
         self.super_basic_block_data(block, data);
     }
 
-    fn visit_source_scope_data(&mut self,
-                                   scope_data: &SourceScopeData) {
-        self.record("SourceScopeData", scope_data);
-        self.super_source_scope_data(scope_data);
+    fn visit_visibility_scope_data(&mut self,
+                                   scope_data: &VisibilityScopeData) {
+        self.record("VisibilityScopeData", scope_data);
+        self.super_visibility_scope_data(scope_data);
     }
 
     fn visit_statement(&mut self,
@@ -85,7 +85,6 @@ impl<'a, 'tcx> mir_visit::Visitor<'tcx> for StatCollector<'a, 'tcx> {
         self.record("Statement", statement);
         self.record(match statement.kind {
             StatementKind::Assign(..) => "StatementKind::Assign",
-            StatementKind::ReadForMatch(..) => "StatementKind::ReadForMatch",
             StatementKind::EndRegion(..) => "StatementKind::EndRegion",
             StatementKind::Validate(..) => "StatementKind::Validate",
             StatementKind::SetDiscriminant { .. } => "StatementKind::SetDiscriminant",
@@ -278,9 +277,9 @@ impl<'a, 'tcx> mir_visit::Visitor<'tcx> for StatCollector<'a, 'tcx> {
         self.super_local_decl(local, local_decl);
     }
 
-    fn visit_source_scope(&mut self,
-                              scope: &SourceScope) {
+    fn visit_visibility_scope(&mut self,
+                              scope: &VisibilityScope) {
         self.record("VisiblityScope", scope);
-        self.super_source_scope(scope);
+        self.super_visibility_scope(scope);
     }
 }

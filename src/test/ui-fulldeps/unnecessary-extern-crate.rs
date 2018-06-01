@@ -10,7 +10,7 @@
 
 // compile-flags: --edition 2018
 
-#![deny(unnecessary_extern_crates)]
+#![deny(unnecessary_extern_crate)]
 #![feature(alloc, test, libc)]
 
 extern crate alloc;

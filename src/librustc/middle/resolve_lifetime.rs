@@ -98,23 +98,16 @@ impl Region {
     }
 
     fn late(hir_map: &Map, def: &hir::LifetimeDef) -> (hir::LifetimeName, Region) {
-        let depth = ty::DebruijnIndex::INNERMOST;
+        let depth = ty::DebruijnIndex::new(1);
         let def_id = hir_map.local_def_id(def.lifetime.id);
         let origin = LifetimeDefOrigin::from_is_in_band(def.in_band);
-        debug!(
-            "Region::late: def={:?} depth={:?} def_id={:?} origin={:?}",
-            def,
-            depth,
-            def_id,
-            origin,
-        );
         (def.lifetime.name, Region::LateBound(depth, def_id, origin))
     }
 
     fn late_anon(index: &Cell<u32>) -> Region {
         let i = index.get();
         index.set(i + 1);
-        let depth = ty::DebruijnIndex::INNERMOST;
+        let depth = ty::DebruijnIndex::new(1);
         Region::LateBoundAnon(depth, i)
     }
 
@@ -130,25 +123,29 @@ impl Region {
 
     fn shifted(self, amount: u32) -> Region {
         match self {
-            Region::LateBound(debruijn, id, origin) => {
-                Region::LateBound(debruijn.shifted_in(amount), id, origin)
+            Region::LateBound(depth, id, origin) => {
+                Region::LateBound(depth.shifted(amount), id, origin)
             }
-            Region::LateBoundAnon(debruijn, index) => {
-                Region::LateBoundAnon(debruijn.shifted_in(amount), index)
+            Region::LateBoundAnon(depth, index) => {
+                Region::LateBoundAnon(depth.shifted(amount), index)
             }
             _ => self,
         }
     }
 
-    fn shifted_out_to_binder(self, binder: ty::DebruijnIndex) -> Region {
+    fn from_depth(self, depth: u32) -> Region {
         match self {
             Region::LateBound(debruijn, id, origin) => Region::LateBound(
-                debruijn.shifted_out_to_binder(binder),
+                ty::DebruijnIndex {
+                    depth: debruijn.depth - (depth - 1),
+                },
                 id,
                 origin,
             ),
             Region::LateBoundAnon(debruijn, index) => Region::LateBoundAnon(
-                debruijn.shifted_out_to_binder(binder),
+                ty::DebruijnIndex {
+                    depth: debruijn.depth - (depth - 1),
+                },
                 index,
             ),
             _ => self,
@@ -1347,7 +1344,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
                         self.tcx
                             .struct_span_lint_node(
-                                lint::builtin::SINGLE_USE_LIFETIMES,
+                                lint::builtin::SINGLE_USE_LIFETIME,
                                 id,
                                 span,
                                 &format!(
@@ -1369,7 +1366,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
                         self.tcx
                             .struct_span_lint_node(
-                                lint::builtin::UNUSED_LIFETIMES,
+                                lint::builtin::UNUSED_LIFETIME,
                                 id,
                                 span,
                                 &format!(
@@ -1661,14 +1658,18 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                 self.xcrate_object_lifetime_defaults
                     .entry(def_id)
                     .or_insert_with(|| {
-                        tcx.generics_of(def_id).params.iter().filter_map(|param| {
-                            match param.kind {
-                                GenericParamDefKind::Type { object_lifetime_default, .. } => {
-                                    Some(object_lifetime_default)
+                        tcx.generics_of(def_id)
+                            .params
+                            .iter()
+                            .filter_map(|param| {
+                                match param.kind {
+                                    GenericParamDefKind::Type(ty) => {
+                                        Some(ty.object_lifetime_default)
+                                    }
+                                    GenericParamDefKind::Lifetime => None,
                                 }
-                                GenericParamDefKind::Lifetime => None,
-                            }
-                        }).collect()
+                            })
+                            .collect()
                     })
             };
             unsubst
@@ -1861,7 +1862,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             .map(|(i, input)| {
                 let mut gather = GatherLifetimes {
                     map: self.map,
-                    outer_index: ty::DebruijnIndex::INNERMOST,
+                    binder_depth: 1,
                     have_bound_regions: false,
                     lifetimes: FxHashSet(),
                 };
@@ -1902,7 +1903,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
         struct GatherLifetimes<'a> {
             map: &'a NamedRegionMap,
-            outer_index: ty::DebruijnIndex,
+            binder_depth: u32,
             have_bound_regions: bool,
             lifetimes: FxHashSet<Region>,
         }
@@ -1914,7 +1915,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
             fn visit_ty(&mut self, ty: &hir::Ty) {
                 if let hir::TyBareFn(_) = ty.node {
-                    self.outer_index.shift_in(1);
+                    self.binder_depth += 1;
                 }
                 if let hir::TyTraitObject(ref bounds, ref lifetime) = ty.node {
                     for bound in bounds {
@@ -1930,15 +1931,15 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     intravisit::walk_ty(self, ty);
                 }
                 if let hir::TyBareFn(_) = ty.node {
-                    self.outer_index.shift_out(1);
+                    self.binder_depth -= 1;
                 }
             }
 
             fn visit_generic_param(&mut self, param: &hir::GenericParam) {
-                if let hir::GenericParam::Lifetime(_) = *param {
-                    // FIXME(eddyb) Do we want this? It only makes a difference
-                    // if this `for<'a>` lifetime parameter is never used.
-                    self.have_bound_regions = true;
+                if let hir::GenericParam::Lifetime(ref lifetime_def) = *param {
+                    for l in &lifetime_def.bounds {
+                        self.visit_lifetime(l);
+                    }
                 }
 
                 intravisit::walk_generic_param(self, param);
@@ -1949,22 +1950,22 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                 trait_ref: &hir::PolyTraitRef,
                 modifier: hir::TraitBoundModifier,
             ) {
-                self.outer_index.shift_in(1);
+                self.binder_depth += 1;
                 intravisit::walk_poly_trait_ref(self, trait_ref, modifier);
-                self.outer_index.shift_out(1);
+                self.binder_depth -= 1;
             }
 
             fn visit_lifetime(&mut self, lifetime_ref: &hir::Lifetime) {
                 if let Some(&lifetime) = self.map.defs.get(&lifetime_ref.id) {
                     match lifetime {
                         Region::LateBound(debruijn, _, _) | Region::LateBoundAnon(debruijn, _)
-                            if debruijn < self.outer_index =>
+                            if debruijn.depth < self.binder_depth =>
                         {
                             self.have_bound_regions = true;
                         }
                         _ => {
                             self.lifetimes
-                                .insert(lifetime.shifted_out_to_binder(self.outer_index));
+                                .insert(lifetime.from_depth(self.binder_depth));
                         }
                     }
                 }
@@ -1984,7 +1985,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         if deprecated {
             self.tcx
                 .struct_span_lint_node(
-                    lint::builtin::ELIDED_LIFETIMES_IN_PATHS,
+                    lint::builtin::ELIDED_LIFETIME_IN_PATH,
                     id,
                     span,
                     &format!("hidden lifetime parameters are deprecated, try `Foo<'_>`"),
@@ -2151,26 +2152,28 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
     fn check_lifetime_params(&mut self, old_scope: ScopeRef, params: &'tcx [hir::GenericParam]) {
         for (i, lifetime_i) in params.lifetimes().enumerate() {
-            match lifetime_i.lifetime.name {
-                hir::LifetimeName::Static | hir::LifetimeName::Underscore => {
-                    let lifetime = lifetime_i.lifetime;
-                    let name = lifetime.name.name();
-                    let mut err = struct_span_err!(
-                        self.tcx.sess,
-                        lifetime.span,
-                        E0262,
-                        "invalid lifetime parameter name: `{}`",
-                        name
-                    );
-                    err.span_label(
-                        lifetime.span,
-                        format!("{} is a reserved lifetime name", name),
-                    );
-                    err.emit();
+            for lifetime in params.lifetimes() {
+                match lifetime.lifetime.name {
+                    hir::LifetimeName::Static | hir::LifetimeName::Underscore => {
+                        let lifetime = lifetime.lifetime;
+                        let name = lifetime.name.name();
+                        let mut err = struct_span_err!(
+                            self.tcx.sess,
+                            lifetime.span,
+                            E0262,
+                            "invalid lifetime parameter name: `{}`",
+                            name
+                        );
+                        err.span_label(
+                            lifetime.span,
+                            format!("{} is a reserved lifetime name", name),
+                        );
+                        err.emit();
+                    }
+                    hir::LifetimeName::Fresh(_)
+                    | hir::LifetimeName::Implicit
+                    | hir::LifetimeName::Name(_) => {}
                 }
-                hir::LifetimeName::Fresh(_)
-                | hir::LifetimeName::Implicit
-                | hir::LifetimeName::Name(_) => {}
             }
 
             // It is a hard error to shadow a lifetime within the same scope.
@@ -2352,18 +2355,31 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             | Region::LateBound(_, def_id, _)
             | Region::EarlyBound(_, def_id, _) => {
                 // A lifetime declared by the user.
-                let track_lifetime_uses = self.track_lifetime_uses();
-                debug!(
-                    "insert_lifetime: track_lifetime_uses={}",
-                    track_lifetime_uses
-                );
-                if track_lifetime_uses && !self.lifetime_uses.contains_key(&def_id) {
-                    debug!("insert_lifetime: first use of {:?}", def_id);
-                    self.lifetime_uses
-                        .insert(def_id, LifetimeUseSet::One(lifetime_ref));
+                let def_local_id = self.tcx.hir.as_local_node_id(def_id).unwrap();
+                if def_local_id == lifetime_ref.id {
+                    // This is weird. Because the HIR defines a
+                    // lifetime *definition* as wrapping a Lifetime,
+                    // we wind up invoking this method also for the
+                    // definitions in some cases (notably
+                    // higher-ranked types). This means that a
+                    // lifetime with one use (e.g., `for<'a> fn(&'a
+                    // u32)`) wind up being counted as two uses.  To
+                    // avoid that, we just ignore the lifetime that
+                    // corresponds to the definition.
                 } else {
-                    debug!("insert_lifetime: many uses of {:?}", def_id);
-                    self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
+                    let track_lifetime_uses = self.track_lifetime_uses();
+                    debug!(
+                        "insert_lifetime: track_lifetime_uses={}",
+                        track_lifetime_uses
+                    );
+                    if track_lifetime_uses && !self.lifetime_uses.contains_key(&def_id) {
+                        debug!("insert_lifetime: first use of {:?}", def_id);
+                        self.lifetime_uses
+                            .insert(def_id, LifetimeUseSet::One(lifetime_ref));
+                    } else {
+                        debug!("insert_lifetime: many uses of {:?}", def_id);
+                        self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
+                    }
                 }
             }
         }
@@ -2416,19 +2432,30 @@ fn insert_late_bound_lifetimes(
     let mut appears_in_where_clause = AllCollector {
         regions: FxHashSet(),
     };
-    appears_in_where_clause.visit_generics(generics);
 
     for param in &generics.params {
         match *param {
             hir::GenericParam::Lifetime(ref lifetime_def) => {
                 if !lifetime_def.bounds.is_empty() {
                     // `'a: 'b` means both `'a` and `'b` are referenced
-                    appears_in_where_clause.regions.insert(lifetime_def.lifetime.name);
+                    appears_in_where_clause.visit_generic_param(param);
                 }
             }
-            hir::GenericParam::Type(_) => {}
+            hir::GenericParam::Type(ref ty_param) => {
+                walk_list!(
+                    &mut appears_in_where_clause,
+                    visit_ty_param_bound,
+                    &ty_param.bounds
+                );
+            }
         }
     }
+
+    walk_list!(
+        &mut appears_in_where_clause,
+        visit_where_predicate,
+        &generics.where_clause.predicates
+    );
 
     debug!(
         "insert_late_bound_lifetimes: appears_in_where_clause={:?}",

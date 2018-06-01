@@ -416,16 +416,16 @@ impl<'a> State<'a> {
             hir::TyImplTraitExistential(ref existty, ref _lifetimes) => {
                 self.print_bounds("impl", &existty.bounds[..])?;
             }
-            hir::TyArray(ref ty, ref length) => {
+            hir::TyArray(ref ty, v) => {
                 self.s.word("[")?;
                 self.print_type(&ty)?;
                 self.s.word("; ")?;
-                self.print_anon_const(length)?;
+                self.ann.nested(self, Nested::Body(v))?;
                 self.s.word("]")?;
             }
-            hir::TyTypeof(ref e) => {
+            hir::TyTypeof(e) => {
                 self.s.word("typeof(")?;
-                self.print_anon_const(e)?;
+                self.ann.nested(self, Nested::Body(e))?;
                 self.s.word(")")?;
             }
             hir::TyInfer => {
@@ -857,7 +857,7 @@ impl<'a> State<'a> {
                 self.maybe_print_comment(field.span.lo())?;
                 self.print_outer_attributes(&field.attrs)?;
                 self.print_visibility(&field.vis)?;
-                self.print_ident(field.ident)?;
+                self.print_name(field.name)?;
                 self.word_nbsp(":")?;
                 self.print_type(&field.ty)?;
                 self.s.word(",")?;
@@ -871,10 +871,10 @@ impl<'a> State<'a> {
         self.head("")?;
         let generics = hir::Generics::empty();
         self.print_struct(&v.node.data, &generics, v.node.name, v.span, false)?;
-        if let Some(ref d) = v.node.disr_expr {
+        if let Some(d) = v.node.disr_expr {
             self.s.space()?;
             self.word_space("=")?;
-            self.print_anon_const(d)?;
+            self.ann.nested(self, Nested::Body(d))?;
         }
         Ok(())
     }
@@ -1091,9 +1091,6 @@ impl<'a> State<'a> {
         self.print_else(elseopt)
     }
 
-    pub fn print_anon_const(&mut self, constant: &hir::AnonConst) -> io::Result<()> {
-        self.ann.nested(self, Nested::Body(constant.body))
-    }
 
     fn print_call_post(&mut self, args: &[hir::Expr]) -> io::Result<()> {
         self.popen()?;
@@ -1144,12 +1141,12 @@ impl<'a> State<'a> {
         self.end()
     }
 
-    fn print_expr_repeat(&mut self, element: &hir::Expr, count: &hir::AnonConst) -> io::Result<()> {
+    fn print_expr_repeat(&mut self, element: &hir::Expr, count: hir::BodyId) -> io::Result<()> {
         self.ibox(indent_unit)?;
         self.s.word("[")?;
         self.print_expr(element)?;
         self.word_space(";")?;
-        self.print_anon_const(count)?;
+        self.ann.nested(self, Nested::Body(count))?;
         self.s.word("]")?;
         self.end()
     }
@@ -1166,7 +1163,7 @@ impl<'a> State<'a> {
                            |s, field| {
                                s.ibox(indent_unit)?;
                                if !field.is_shorthand {
-                                    s.print_ident(field.ident)?;
+                                    s.print_name(field.name.node)?;
                                     s.word_space(":")?;
                                }
                                s.print_expr(&field.expr)?;
@@ -1291,7 +1288,7 @@ impl<'a> State<'a> {
             hir::ExprArray(ref exprs) => {
                 self.print_expr_vec(exprs)?;
             }
-            hir::ExprRepeat(ref element, ref count) => {
+            hir::ExprRepeat(ref element, count) => {
                 self.print_expr_repeat(&element, count)?;
             }
             hir::ExprStruct(ref qpath, ref fields, ref wth) => {
@@ -1406,10 +1403,10 @@ impl<'a> State<'a> {
                 self.word_space("=")?;
                 self.print_expr_maybe_paren(&rhs, prec)?;
             }
-            hir::ExprField(ref expr, ident) => {
+            hir::ExprField(ref expr, name) => {
                 self.print_expr_maybe_paren(expr, parser::PREC_POSTFIX)?;
                 self.s.word(".")?;
-                self.print_ident(ident)?;
+                self.print_name(name.node)?;
             }
             hir::ExprIndex(ref expr, ref index) => {
                 self.print_expr_maybe_paren(&expr, parser::PREC_POSTFIX)?;
@@ -1561,17 +1558,13 @@ impl<'a> State<'a> {
         self.s.word(&i.to_string())
     }
 
-    pub fn print_ident(&mut self, ident: ast::Ident) -> io::Result<()> {
-        if ident.is_raw_guess() {
-            self.s.word(&format!("r#{}", ident.name))?;
-        } else {
-            self.s.word(&ident.as_str())?;
-        }
-        self.ann.post(self, NodeName(&ident.name))
-    }
-
     pub fn print_name(&mut self, name: ast::Name) -> io::Result<()> {
-        self.print_ident(name.to_ident())
+        if name.to_ident().is_raw_guess() {
+            self.s.word(&format!("r#{}", name))?;
+        } else {
+            self.s.word(&name.as_str())?;
+        }
+        self.ann.post(self, NodeName(&name))
     }
 
     pub fn print_for_decl(&mut self, loc: &hir::Local, coll: &hir::Expr) -> io::Result<()> {
@@ -1777,7 +1770,7 @@ impl<'a> State<'a> {
                                    |s, f| {
                                        s.cbox(indent_unit)?;
                                        if !f.node.is_shorthand {
-                                           s.print_ident(f.node.ident)?;
+                                           s.print_name(f.node.name)?;
                                            s.word_nbsp(":")?;
                                        }
                                        s.print_pat(&f.node.pat)?;

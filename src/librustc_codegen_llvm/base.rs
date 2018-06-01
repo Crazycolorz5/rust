@@ -43,6 +43,7 @@ use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::layout::{self, Align, TyLayout, LayoutOf};
 use rustc::ty::maps::Providers;
 use rustc::dep_graph::{DepNode, DepConstructor};
+use rustc::ty::subst::Kind;
 use rustc::middle::cstore::{self, LinkMeta, LinkagePreference};
 use rustc::middle::exported_symbols;
 use rustc::util::common::{time, print_time_passes_entry};
@@ -594,7 +595,7 @@ fn maybe_create_entry_wrapper(cx: &CodegenCx) {
             let start_fn = callee::resolve_and_get_fn(
                 cx,
                 start_def_id,
-                cx.tcx.intern_substs(&[main_ret_ty.into()]),
+                cx.tcx.intern_substs(&[Kind::from(main_ret_ty)]),
             );
             (start_fn, vec![bx.pointercast(rust_main, Type::i8p(cx).ptr_to()),
                             arg_argc, arg_argv])
@@ -642,7 +643,7 @@ fn write_metadata<'a, 'gcx>(tcx: TyCtxt<'a, 'gcx, 'gcx>,
             config::CrateTypeDylib |
             config::CrateTypeProcMacro => MetadataKind::Compressed,
         }
-    }).max().unwrap_or(MetadataKind::None);
+    }).max().unwrap();
 
     if kind == MetadataKind::None {
         return (metadata_llcx,

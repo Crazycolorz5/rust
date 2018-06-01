@@ -537,9 +537,8 @@ impl<'f, 'gcx, 'tcx> Coerce<'f, 'gcx, 'tcx> {
 
         let mut selcx = traits::SelectionContext::new(self);
 
-        // Use a FIFO queue for this custom fulfillment procedure. (The maximum
-        // length is almost always 1.)
-        let mut queue = VecDeque::with_capacity(1);
+        // Use a FIFO queue for this custom fulfillment procedure.
+        let mut queue = VecDeque::new();
 
         // Create an obligation for `Source: CoerceUnsized<Target>`.
         let cause = ObligationCause::misc(self.cause.span, self.body_id);
@@ -548,7 +547,7 @@ impl<'f, 'gcx, 'tcx> Coerce<'f, 'gcx, 'tcx> {
                                                          coerce_unsized_did,
                                                          0,
                                                          coerce_source,
-                                                         &[coerce_target.into()]));
+                                                         &[coerce_target]));
 
         let mut has_unsized_tuple_coercion = false;
 

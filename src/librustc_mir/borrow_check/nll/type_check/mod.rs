@@ -836,8 +836,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                     );
                 }
             }
-            StatementKind::ReadForMatch(_)
-            | StatementKind::StorageLive(_)
+            StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::InlineAsm { .. }
             | StatementKind::EndRegion(_)
@@ -1376,10 +1375,9 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 }
 
                 CastKind::Unsize => {
-                    let &ty = ty;
                     let trait_ref = ty::TraitRef {
                         def_id: tcx.lang_items().coerce_unsized_trait().unwrap(),
-                        substs: tcx.mk_substs_trait(op.ty(mir, tcx), &[ty.into()]),
+                        substs: tcx.mk_substs_trait(op.ty(mir, tcx), &[ty]),
                     };
 
                     self.prove_trait_ref(trait_ref, location);

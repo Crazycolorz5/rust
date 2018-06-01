@@ -8,20 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// test that certain things are disallowed in constant functions
+// test that certain things are disallowed in const fn signatures
 
 #![feature(const_fn)]
 
 // no destructuring
 const fn i((
-            a,
-            //~^ ERROR arguments of constant functions can only be immutable by-value bindings
-            b
-            //~^ ERROR arguments of constant functions can only be immutable by-value bindings
+            a, //~ ERROR: E0022
+            b  //~ ERROR: E0022
            ): (u32, u32)) -> u32 {
     a + b
-    //~^ ERROR let bindings in constant functions are unstable
-    //~| ERROR let bindings in constant functions are unstable
 }
 
 fn main() {}

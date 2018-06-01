@@ -25,11 +25,8 @@ impl HasInfo {
     }
 
     fn get_other(&mut self) -> usize {
-        let r = &mut *self;
-        r.get_size(width!(self))
+        self.get_size(width!(self))
     }
-    // Above is like `self.get_size(width!(self))`, but it
-    // deliberately avoids NLL's two phase borrow feature.
 }
 
-fn main() { }
+fn main() { #![rustc_error] } // rust-lang/rust#49855

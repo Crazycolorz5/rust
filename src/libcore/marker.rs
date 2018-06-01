@@ -605,17 +605,7 @@ unsafe impl<'a, T: ?Sized> Freeze for &'a mut T {}
 ///
 /// [`PinMut`]: ../mem/struct.PinMut.html
 #[unstable(feature = "pin", issue = "49150")]
-pub auto trait Unpin {}
-
-/// A type which does not implement `Unpin`.
-///
-/// If a type contains a `Pinned`, it will not implement `Unpin` by default.
-#[unstable(feature = "pin", issue = "49150")]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Pinned;
-
-#[unstable(feature = "pin", issue = "49150")]
-impl !Unpin for Pinned {}
+pub unsafe auto trait Unpin {}
 
 /// Implementations of `Copy` for primitive types.
 ///

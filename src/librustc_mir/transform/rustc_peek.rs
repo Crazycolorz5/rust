@@ -158,7 +158,6 @@ fn each_block<'a, 'tcx, O>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             mir::StatementKind::Assign(ref place, ref rvalue) => {
                 (place, rvalue)
             }
-            mir::StatementKind::ReadForMatch(_) |
             mir::StatementKind::StorageLive(_) |
             mir::StatementKind::StorageDead(_) |
             mir::StatementKind::InlineAsm { .. } |

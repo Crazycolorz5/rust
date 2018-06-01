@@ -168,6 +168,8 @@ impl<T: fmt::UpperHex> fmt::UpperHex for Wrapping<T> {
     }
 }
 
+mod wrapping;
+
 // All these modules are technically private and only exposed for coretests:
 pub mod flt2dec;
 pub mod dec2flt;
@@ -180,8 +182,6 @@ macro_rules! doc_comment {
         $($tt)*
     };
 }
-
-mod wrapping;
 
 // `Int` + `SignedInt` implemented for signed integers
 macro_rules! int_impl {
@@ -3401,30 +3401,6 @@ $EndFeature, "
             }
         }
 
-        doc_comment! {
-            concat!("Returns the smallest power of two greater than or equal to `n`. If
-the next power of two is greater than the type's maximum value,
-the return value is wrapped to `0`.
-
-# Examples
-
-Basic usage:
-
-```
-#![feature(wrapping_next_power_of_two)]
-", $Feature, "
-assert_eq!(2", stringify!($SelfT), ".wrapping_next_power_of_two(), 2);
-assert_eq!(3", stringify!($SelfT), ".wrapping_next_power_of_two(), 4);
-assert_eq!(", stringify!($SelfT), "::max_value().wrapping_next_power_of_two(), 0);",
-$EndFeature, "
-```"),
-            #[unstable(feature = "wrapping_next_power_of_two", issue = "32463",
-                       reason = "needs decision on wrapping behaviour")]
-            pub fn wrapping_next_power_of_two(self) -> Self {
-                self.one_less_than_next_power_of_two().wrapping_add(1)
-            }
-        }
-
         /// Return the memory representation of this integer as a byte array.
         ///
         /// The target platform’s native endianness is used.
@@ -4102,6 +4078,61 @@ pub enum FpCategory {
     /// A regular floating point number.
     #[stable(feature = "rust1", since = "1.0.0")]
     Normal,
+}
+
+// Technically private and only exposed for coretests:
+#[doc(hidden)]
+#[unstable(feature = "float_internals",
+           reason = "internal routines only exposed for testing",
+           issue = "0")]
+pub trait Float: Sized {
+    /// Type used by `to_bits` and `from_bits`.
+    type Bits;
+
+    /// Returns `true` if this value is NaN and false otherwise.
+    fn is_nan(self) -> bool;
+
+    /// Returns `true` if this value is positive infinity or negative infinity and
+    /// false otherwise.
+    fn is_infinite(self) -> bool;
+
+    /// Returns `true` if this number is neither infinite nor NaN.
+    fn is_finite(self) -> bool;
+
+    /// Returns `true` if this number is neither zero, infinite, denormal, or NaN.
+    fn is_normal(self) -> bool;
+
+    /// Returns the category that this number falls into.
+    fn classify(self) -> FpCategory;
+
+    /// Returns `true` if `self` is positive, including `+0.0` and
+    /// `Float::infinity()`.
+    fn is_sign_positive(self) -> bool;
+
+    /// Returns `true` if `self` is negative, including `-0.0` and
+    /// `Float::neg_infinity()`.
+    fn is_sign_negative(self) -> bool;
+
+    /// Take the reciprocal (inverse) of a number, `1/x`.
+    fn recip(self) -> Self;
+
+    /// Convert radians to degrees.
+    fn to_degrees(self) -> Self;
+
+    /// Convert degrees to radians.
+    fn to_radians(self) -> Self;
+
+    /// Returns the maximum of the two numbers.
+    fn max(self, other: Self) -> Self;
+
+    /// Returns the minimum of the two numbers.
+    fn min(self, other: Self) -> Self;
+
+    /// Raw transmutation to integer.
+    fn to_bits(self) -> Self::Bits;
+
+    /// Raw transmutation from integer.
+    fn from_bits(v: Self::Bits) -> Self;
 }
 
 macro_rules! from_str_radix_int_impl {

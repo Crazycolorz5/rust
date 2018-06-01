@@ -1,25 +1,14 @@
-error[E0597]: `b` does not live long enough
-  --> $DIR/range-2.rs:17:13
+error: compilation successful
+  --> $DIR/range-2.rs:13:1
    |
-LL |         &a..&b
-   |             ^^ borrowed value does not live long enough
-LL |     };
-   |     - borrowed value only lives until here
-...
-LL |     r.use_ref();
-   |     - borrow later used here
+LL | / pub fn main() { #![rustc_error] // rust-lang/rust#49855
+LL | |     let r = {
+LL | |         let a = 42;
+LL | |         let b = 42;
+...  |
+LL | |     //~| ERROR `b` does not live long enough
+LL | | }
+   | |_^
 
-error[E0597]: `a` does not live long enough
-  --> $DIR/range-2.rs:17:9
-   |
-LL |         &a..&b
-   |         ^^ borrowed value does not live long enough
-LL |     };
-   |     - borrowed value only lives until here
-...
-LL |     r.use_ref();
-   |     - borrow later used here
+error: aborting due to previous error
 
-error: aborting due to 2 previous errors
-
-For more information about this error, try `rustc --explain E0597`.

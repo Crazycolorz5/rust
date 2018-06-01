@@ -8,10 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// run-rustfix
-
-#![allow(dead_code)]
-
 #[repr(align=8)] //~ ERROR incorrect `repr(align)` attribute format
 struct A(u64);
 

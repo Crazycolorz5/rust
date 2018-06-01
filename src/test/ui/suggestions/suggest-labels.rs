@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(unreachable_code, unused_labels)]
+#[allow(unreachable_code)]
 fn main() {
     'foo: loop {
         break 'fo; //~ ERROR use of undeclared label

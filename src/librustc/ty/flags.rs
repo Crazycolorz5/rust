@@ -16,16 +16,13 @@ use ty::{self, Ty, TypeFlags, TypeFoldable};
 pub struct FlagComputation {
     pub flags: TypeFlags,
 
-    // see `TyS::outer_exclusive_binder` for details
-    pub outer_exclusive_binder: ty::DebruijnIndex,
+    // maximum depth of any bound region that we have seen thus far
+    pub depth: u32,
 }
 
 impl FlagComputation {
     fn new() -> FlagComputation {
-        FlagComputation {
-            flags: TypeFlags::empty(),
-            outer_exclusive_binder: ty::DebruijnIndex::INNERMOST,
-        }
+        FlagComputation { flags: TypeFlags::empty(), depth: 0 }
     }
 
     pub fn for_sty(st: &ty::TypeVariants) -> FlagComputation {
@@ -38,17 +35,10 @@ impl FlagComputation {
         self.flags = self.flags | (flags & TypeFlags::NOMINAL_FLAGS);
     }
 
-    /// indicates that `self` refers to something at binding level `binder`
-    fn add_binder(&mut self, binder: ty::DebruijnIndex) {
-        let exclusive_binder = binder.shifted_in(1);
-        self.add_exclusive_binder(exclusive_binder);
-    }
-
-    /// indicates that `self` refers to something *inside* binding
-    /// level `binder` -- not bound by `binder`, but bound by the next
-    /// binder internal to it
-    fn add_exclusive_binder(&mut self, exclusive_binder: ty::DebruijnIndex) {
-        self.outer_exclusive_binder = self.outer_exclusive_binder.max(exclusive_binder);
+    fn add_depth(&mut self, depth: u32) {
+        if depth > self.depth {
+            self.depth = depth;
+        }
     }
 
     /// Adds the flags/depth from a set of types that appear within the current type, but within a
@@ -59,11 +49,9 @@ impl FlagComputation {
         // The types that contributed to `computation` occurred within
         // a region binder, so subtract one from the region depth
         // within when adding the depth to `self`.
-        let outer_exclusive_binder = computation.outer_exclusive_binder;
-        if outer_exclusive_binder > ty::DebruijnIndex::INNERMOST {
-            self.add_exclusive_binder(outer_exclusive_binder.shifted_out(1));
-        } else {
-            // otherwise, this binder captures nothing
+        let depth = computation.depth;
+        if depth > 0 {
+            self.add_depth(depth - 1);
         }
     }
 
@@ -206,7 +194,7 @@ impl FlagComputation {
 
     fn add_ty(&mut self, ty: Ty) {
         self.add_flags(ty.flags);
-        self.add_exclusive_binder(ty.outer_exclusive_binder);
+        self.add_depth(ty.region_depth);
     }
 
     fn add_tys(&mut self, tys: &[Ty]) {
@@ -227,7 +215,7 @@ impl FlagComputation {
     fn add_region(&mut self, r: ty::Region) {
         self.add_flags(r.type_flags());
         if let ty::ReLateBound(debruijn, _) = *r {
-            self.add_binder(debruijn);
+            self.add_depth(debruijn.depth);
         }
     }
 

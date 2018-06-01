@@ -55,7 +55,8 @@ fn classify_arg<'a, Ty, C>(cx: C, arg: &ArgType<'a, Ty>)
                 match scalar.value {
                     abi::Int(..) |
                     abi::Pointer => Class::Int,
-                    abi::Float(_) => Class::Sse
+                    abi::F32 |
+                    abi::F64 => Class::Sse
                 }
             }
 
@@ -100,7 +101,7 @@ fn classify_arg<'a, Ty, C>(cx: C, arg: &ArgType<'a, Ty>)
     }
 
     let mut cls = [None; MAX_EIGHTBYTES];
-    classify(cx, arg.layout, &mut cls, Size::ZERO)?;
+    classify(cx, arg.layout, &mut cls, Size::from_bytes(0))?;
     if n > 2 {
         if cls[0] != Some(Class::Sse) {
             return Err(Memory);
@@ -174,7 +175,7 @@ fn cast_target(cls: &[Option<Class>], size: Size) -> CastTarget {
             target = CastTarget::pair(lo, hi);
         }
     }
-    assert_eq!(reg_component(cls, &mut i, Size::ZERO), None);
+    assert_eq!(reg_component(cls, &mut i, Size::from_bytes(0)), None);
     target
 }
 

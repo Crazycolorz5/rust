@@ -9,20 +9,18 @@
 // except according to those terms.
 
 const A: usize = { 1; 2 };
-//~^ ERROR statements in constants are unstable
+//~^ ERROR: blocks in constants are limited to items and tail expressions
 
 const B: usize = { { } 2 };
-//~^ ERROR statements in constants are unstable
+//~^ ERROR: blocks in constants are limited to items and tail expressions
 
 macro_rules! foo {
-    () => (()) //~ ERROR statements in constants are unstable
+    () => (()) //~ ERROR: blocks in constants are limited to items and tail expressions
 }
 const C: usize = { foo!(); 2 };
 
 const D: usize = { let x = 4; 2 };
-//~^ ERROR let bindings in constants are unstable
-//~| ERROR statements in constants are unstable
-//~| ERROR let bindings in constants are unstable
-//~| ERROR statements in constants are unstable
+//~^ ERROR: blocks in constants are limited to items and tail expressions
+//~^^ ERROR: blocks in constants are limited to items and tail expressions
 
 pub fn main() {}

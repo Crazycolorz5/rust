@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(unused_doc_comments)]
+#![deny(unused_doc_comment)]
 
 fn foo() {
     /// a //~ ERROR doc comment not used by rustdoc

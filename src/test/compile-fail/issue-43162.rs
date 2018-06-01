@@ -9,7 +9,6 @@
 // except according to those terms.
 
 fn foo() -> bool {
-    //~^ ERROR E0308
     break true; //~ ERROR E0268
 }
 

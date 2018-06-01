@@ -14,13 +14,12 @@ use hir::def_id::DefId;
 
 use middle::const_val::ConstVal;
 use middle::region;
-use polonius_engine::Atom;
 use rustc_data_structures::indexed_vec::Idx;
 use ty::subst::{Substs, Subst, Kind, UnpackedKind};
 use ty::{self, AdtDef, TypeFlags, Ty, TyCtxt, TypeFoldable};
-use ty::{Slice, TyS, ParamEnvAnd, ParamEnv};
+use ty::{Slice, TyS};
 use util::captures::Captures;
-use mir::interpret::{Scalar, Pointer, Value, ConstValue};
+use mir::interpret::{Allocation, PrimVal, MemoryPointer, Value, ConstValue};
 
 use std::iter;
 use std::cmp::Ordering;
@@ -35,7 +34,7 @@ use hir;
 use self::InferTy::*;
 use self::TypeVariants::*;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct TypeAndMut<'tcx> {
     pub ty: Ty<'tcx>,
     pub mutbl: hir::Mutability,
@@ -81,7 +80,7 @@ impl BoundRegion {
 
 /// NB: If you change this, you'll probably want to change the corresponding
 /// AST structure in libsyntax/ast.rs as well.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub enum TypeVariants<'tcx> {
     /// The primitive boolean type. Written as `bool`.
     TyBool,
@@ -269,7 +268,7 @@ pub enum TypeVariants<'tcx> {
 ///
 /// It'd be nice to split this struct into ClosureSubsts and
 /// GeneratorSubsts, I believe. -nmatsakis
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ClosureSubsts<'tcx> {
     /// Lifetime and type parameters from the enclosing function,
     /// concatenated with the types of the upvars.
@@ -352,7 +351,7 @@ impl<'tcx> ClosureSubsts<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct GeneratorSubsts<'tcx> {
     pub substs: &'tcx Substs<'tcx>,
 }
@@ -485,7 +484,7 @@ impl<'tcx> UpvarSubsts<'tcx> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum ExistentialPredicate<'tcx> {
     /// e.g. Iterator
     Trait(ExistentialTraitRef<'tcx>),
@@ -623,18 +622,6 @@ impl<'tcx> TraitRef<'tcx> {
         // associated types.
         self.substs.types()
     }
-
-    pub fn from_method(tcx: TyCtxt<'_, '_, 'tcx>,
-                       trait_id: DefId,
-                       substs: &Substs<'tcx>)
-                       -> ty::TraitRef<'tcx> {
-        let defs = tcx.generics_of(trait_id);
-
-        ty::TraitRef {
-            def_id: trait_id,
-            substs: tcx.intern_substs(&substs[..defs.params.len()])
-        }
-    }
 }
 
 pub type PolyTraitRef<'tcx> = Binder<TraitRef<'tcx>>;
@@ -661,7 +648,7 @@ impl<'tcx> PolyTraitRef<'tcx> {
 ///
 /// The substitutions don't include the erased `Self`, only trait
 /// type and lifetime parameters (`[X, Y]` and `['a, 'b]` above).
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct ExistentialTraitRef<'tcx> {
     pub def_id: DefId,
     pub substs: &'tcx Substs<'tcx>,
@@ -676,18 +663,6 @@ impl<'a, 'gcx, 'tcx> ExistentialTraitRef<'tcx> {
         self.substs.types()
     }
 
-    pub fn erase_self_ty(tcx: TyCtxt<'a, 'gcx, 'tcx>,
-                         trait_ref: ty::TraitRef<'tcx>)
-                         -> ty::ExistentialTraitRef<'tcx> {
-        // Assert there is a Self.
-        trait_ref.substs.type_at(0);
-
-        ty::ExistentialTraitRef {
-            def_id: trait_ref.def_id,
-            substs: tcx.intern_substs(&trait_ref.substs[1..])
-        }
-    }
-
     /// Object types don't have a self-type specified. Therefore, when
     /// we convert the principal trait-ref into a normal trait-ref,
     /// you must give *some* self-type. A common choice is `mk_err()`
@@ -699,7 +674,8 @@ impl<'a, 'gcx, 'tcx> ExistentialTraitRef<'tcx> {
 
         ty::TraitRef {
             def_id: self.def_id,
-            substs: tcx.mk_substs_trait(self_ty, self.substs)
+            substs: tcx.mk_substs(
+                iter::once(self_ty.into()).chain(self.substs.iter().cloned()))
         }
     }
 }
@@ -710,16 +686,6 @@ impl<'tcx> PolyExistentialTraitRef<'tcx> {
     pub fn def_id(&self) -> DefId {
         self.skip_binder().def_id
     }
-
-    /// Object types don't have a self-type specified. Therefore, when
-    /// we convert the principal trait-ref into a normal trait-ref,
-    /// you must give *some* self-type. A common choice is `mk_err()`
-    /// or some skolemized type.
-    pub fn with_self_ty(&self, tcx: TyCtxt<'_, '_, 'tcx>,
-                        self_ty: Ty<'tcx>)
-                        -> ty::PolyTraitRef<'tcx>  {
-        self.map_bound(|trait_ref| trait_ref.with_self_ty(tcx, self_ty))
-    }
 }
 
 /// Binder is a binder for higher-ranked lifetimes. It is part of the
@@ -729,7 +695,7 @@ impl<'tcx> PolyExistentialTraitRef<'tcx> {
 /// erase, or otherwise "discharge" these bound regions, we change the
 /// type from `Binder<T>` to just `T` (see
 /// e.g. `liberate_late_bound_regions`).
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct Binder<T>(T);
 
 impl<T> Binder<T> {
@@ -835,7 +801,7 @@ impl<T> Binder<T> {
 
 /// Represents the projection of an associated type. In explicit UFCS
 /// form this would be written `<T as Trait<..>>::N`.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ProjectionTy<'tcx> {
     /// The parameters of the associated item.
     pub substs: &'tcx Substs<'tcx>,
@@ -903,7 +869,7 @@ impl<'tcx> PolyGenSig<'tcx> {
 /// - `inputs` is the list of arguments and their modes.
 /// - `output` is the return type.
 /// - `variadic` indicates whether this is a variadic function. (only true for foreign fns)
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct FnSig<'tcx> {
     pub inputs_and_output: &'tcx Slice<Ty<'tcx>>,
     pub variadic: bool,
@@ -947,7 +913,7 @@ impl<'tcx> PolyFnSig<'tcx> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct ParamTy {
     pub idx: u32,
     pub name: InternedString,
@@ -989,11 +955,11 @@ impl<'a, 'gcx, 'tcx> ParamTy {
 ///     for<'a> fn(for<'b> fn(&'b isize, &'a isize), &'a char)
 ///     ^          ^            |        |         |
 ///     |          |            |        |         |
-///     |          +------------+ 0      |         |
+///     |          +------------+ 1      |         |
 ///     |                                |         |
-///     +--------------------------------+ 1       |
+///     +--------------------------------+ 2       |
 ///     |                                          |
-///     +------------------------------------------+ 0
+///     +------------------------------------------+ 1
 ///
 /// In this type, there are two binders (the outer fn and the inner
 /// fn). We need to be able to determine, for any given region, which
@@ -1005,9 +971,9 @@ impl<'a, 'gcx, 'tcx> ParamTy {
 ///
 /// Let's start with the reference type `&'b isize` that is the first
 /// argument to the inner function. This region `'b` is assigned a De
-/// Bruijn index of 0, meaning "the innermost binder" (in this case, a
+/// Bruijn index of 1, meaning "the innermost binder" (in this case, a
 /// fn). The region `'a` that appears in the second argument type (`&'a
-/// isize`) would then be assigned a De Bruijn index of 1, meaning "the
+/// isize`) would then be assigned a De Bruijn index of 2, meaning "the
 /// second-innermost binder". (These indices are written on the arrays
 /// in the diagram).
 ///
@@ -1017,15 +983,15 @@ impl<'a, 'gcx, 'tcx> ParamTy {
 /// the outermost fn. But this time, this reference is not nested within
 /// any other binders (i.e., it is not an argument to the inner fn, but
 /// rather the outer one). Therefore, in this case, it is assigned a
-/// De Bruijn index of 0, because the innermost binder in that location
+/// De Bruijn index of 1, because the innermost binder in that location
 /// is the outer fn.
 ///
 /// [dbi]: http://en.wikipedia.org/wiki/De_Bruijn_index
 #[derive(Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug, Copy, PartialOrd, Ord)]
 pub struct DebruijnIndex {
     /// We maintain the invariant that this is never 0. So 1 indicates
-    /// the innermost binder.
-    index: u32,
+    /// the innermost binder. To ensure this, create with `DebruijnIndex::new`.
+    pub depth: u32,
 }
 
 pub type Region<'tcx> = &'tcx RegionKind;
@@ -1149,17 +1115,17 @@ pub struct EarlyBoundRegion {
     pub name: InternedString,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct TyVid {
     pub index: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct IntVid {
     pub index: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct FloatVid {
     pub index: u32,
 }
@@ -1170,25 +1136,7 @@ newtype_index!(RegionVid
         DEBUG_FORMAT = custom,
     });
 
-impl Atom for RegionVid {
-    fn index(self) -> usize {
-        Idx::index(self)
-    }
-}
-
-impl From<usize> for RegionVid {
-    fn from(i: usize) -> RegionVid {
-        RegionVid::new(i)
-    }
-}
-
-impl From<RegionVid> for usize {
-    fn from(vid: RegionVid) -> usize {
-        Idx::index(vid)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum InferTy {
     TyVar(TyVid),
     IntVar(IntVid),
@@ -1208,7 +1156,7 @@ pub enum InferTy {
 newtype_index!(CanonicalVar);
 
 /// A `ProjectionPredicate` for an `ExistentialTraitRef`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ExistentialProjection<'tcx> {
     pub item_def_id: DefId,
     pub substs: &'tcx Substs<'tcx>,
@@ -1240,7 +1188,8 @@ impl<'a, 'tcx, 'gcx> ExistentialProjection<'tcx> {
         ty::ProjectionPredicate {
             projection_ty: ty::ProjectionTy {
                 item_def_id: self.item_def_id,
-                substs: tcx.mk_substs_trait(self_ty, self.substs),
+                substs: tcx.mk_substs(
+                iter::once(self_ty.into()).chain(self.substs.iter().cloned())),
             },
             ty: self.ty,
         }
@@ -1259,69 +1208,15 @@ impl<'a, 'tcx, 'gcx> PolyExistentialProjection<'tcx> {
 }
 
 impl DebruijnIndex {
-    pub const INNERMOST: DebruijnIndex = DebruijnIndex { index: 0 };
-
-    /// Returns the resulting index when this value is moved into
-    /// `amount` number of new binders. So e.g. if you had
-    ///
-    ///    for<'a> fn(&'a x)
-    ///
-    /// and you wanted to change to
-    ///
-    ///    for<'a> fn(for<'b> fn(&'a x))
-    ///
-    /// you would need to shift the index for `'a` into 1 new binder.
-    #[must_use]
-    pub const fn shifted_in(self, amount: u32) -> DebruijnIndex {
-        DebruijnIndex { index: self.index + amount }
+    pub fn new(depth: u32) -> DebruijnIndex {
+        assert!(depth > 0);
+        DebruijnIndex { depth: depth }
     }
 
-    /// Update this index in place by shifting it "in" through
-    /// `amount` number of binders.
-    pub fn shift_in(&mut self, amount: u32) {
-        *self = self.shifted_in(amount);
-    }
-
-    /// Returns the resulting index when this value is moved out from
-    /// `amount` number of new binders.
-    #[must_use]
-    pub const fn shifted_out(self, amount: u32) -> DebruijnIndex {
-        DebruijnIndex { index: self.index - amount }
-    }
-
-    /// Update in place by shifting out from `amount` binders.
-    pub fn shift_out(&mut self, amount: u32) {
-        *self = self.shifted_out(amount);
-    }
-
-    /// Adjusts any Debruijn Indices so as to make `to_binder` the
-    /// innermost binder. That is, if we have something bound at `to_binder`,
-    /// it will now be bound at INNERMOST. This is an appropriate thing to do
-    /// when moving a region out from inside binders:
-    ///
-    /// ```
-    ///             for<'a>   fn(for<'b>   for<'c>   fn(&'a u32), _)
-    /// // Binder:  D3           D2        D1            ^^
-    /// ```
-    ///
-    /// Here, the region `'a` would have the debruijn index D3,
-    /// because it is the bound 3 binders out. However, if we wanted
-    /// to refer to that region `'a` in the second argument (the `_`),
-    /// those two binders would not be in scope. In that case, we
-    /// might invoke `shift_out_to_binder(D3)`. This would adjust the
-    /// debruijn index of `'a` to D1 (the innermost binder).
-    ///
-    /// If we invoke `shift_out_to_binder` and the region is in fact
-    /// bound by one of the binders we are shifting out of, that is an
-    /// error (and should fail an assertion failure).
-    pub fn shifted_out_to_binder(self, to_binder: DebruijnIndex) -> Self {
-        self.shifted_out(to_binder.index - Self::INNERMOST.index)
+    pub fn shifted(&self, amount: u32) -> DebruijnIndex {
+        DebruijnIndex { depth: self.depth + amount }
     }
 }
-
-impl_stable_hash_for!(struct DebruijnIndex {
-    index
-});
 
 /// Region utilities
 impl RegionKind {
@@ -1332,39 +1227,19 @@ impl RegionKind {
         }
     }
 
-    pub fn bound_at_or_above_binder(&self, index: DebruijnIndex) -> bool {
+    pub fn escapes_depth(&self, depth: u32) -> bool {
         match *self {
-            ty::ReLateBound(debruijn, _) => debruijn >= index,
+            ty::ReLateBound(debruijn, _) => debruijn.depth > depth,
             _ => false,
         }
     }
 
-    /// Adjusts any Debruijn Indices so as to make `to_binder` the
-    /// innermost binder. That is, if we have something bound at `to_binder`,
-    /// it will now be bound at INNERMOST. This is an appropriate thing to do
-    /// when moving a region out from inside binders:
-    ///
-    /// ```
-    ///             for<'a>   fn(for<'b>   for<'c>   fn(&'a u32), _)
-    /// // Binder:  D3           D2        D1            ^^
-    /// ```
-    ///
-    /// Here, the region `'a` would have the debruijn index D3,
-    /// because it is the bound 3 binders out. However, if we wanted
-    /// to refer to that region `'a` in the second argument (the `_`),
-    /// those two binders would not be in scope. In that case, we
-    /// might invoke `shift_out_to_binder(D3)`. This would adjust the
-    /// debruijn index of `'a` to D1 (the innermost binder).
-    ///
-    /// If we invoke `shift_out_to_binder` and the region is in fact
-    /// bound by one of the binders we are shifting out of, that is an
-    /// error (and should fail an assertion failure).
-    pub fn shifted_out_to_binder(&self, to_binder: ty::DebruijnIndex) -> RegionKind {
+    /// Returns the depth of `self` from the (1-based) binding level `depth`
+    pub fn from_depth(&self, depth: u32) -> RegionKind {
         match *self {
-            ty::ReLateBound(debruijn, r) => ty::ReLateBound(
-                debruijn.shifted_out_to_binder(to_binder),
-                r,
-            ),
+            ty::ReLateBound(debruijn, r) => ty::ReLateBound(DebruijnIndex {
+                depth: debruijn.depth - (depth - 1)
+            }, r),
             r => r
         }
     }
@@ -1851,7 +1726,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 }
 
 /// Typed constant value.
-#[derive(Copy, Clone, Debug, Hash, RustcEncodable, RustcDecodable, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, Hash, RustcEncodable, RustcDecodable, Eq, PartialEq)]
 pub struct Const<'tcx> {
     pub ty: Ty<'tcx>,
 
@@ -1893,6 +1768,15 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
+    pub fn from_alloc(
+        tcx: TyCtxt<'_, '_, 'tcx>,
+        alloc: &'tcx Allocation,
+        ty: Ty<'tcx>,
+    ) -> &'tcx Self {
+        Self::from_const_value(tcx, ConstValue::ByRef(alloc), ty)
+    }
+
+    #[inline]
     pub fn from_byval_value(
         tcx: TyCtxt<'_, '_, 'tcx>,
         val: Value,
@@ -1902,64 +1786,51 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
-    pub fn from_scalar(
+    pub fn from_primval(
         tcx: TyCtxt<'_, '_, 'tcx>,
-        val: Scalar,
+        val: PrimVal,
         ty: Ty<'tcx>,
     ) -> &'tcx Self {
-        Self::from_const_value(tcx, ConstValue::from_scalar(val), ty)
+        Self::from_const_value(tcx, ConstValue::from_primval(val), ty)
     }
 
     #[inline]
     pub fn from_bits(
         tcx: TyCtxt<'_, '_, 'tcx>,
-        bits: u128,
-        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
+        val: u128,
+        ty: Ty<'tcx>,
     ) -> &'tcx Self {
-        let ty = tcx.lift_to_global(&ty).unwrap();
-        let size = tcx.layout_of(ty).unwrap_or_else(|e| {
-            panic!("could not compute layout for {:?}: {:?}", ty, e)
-        }).size;
-        let shift = 128 - size.bits();
-        let truncated = (bits << shift) >> shift;
-        assert_eq!(truncated, bits, "from_bits called with untruncated value");
-        Self::from_scalar(tcx, Scalar::Bits { bits, defined: size.bits() as u8 }, ty.value)
+        Self::from_primval(tcx, PrimVal::Bytes(val), ty)
     }
 
     #[inline]
     pub fn zero_sized(tcx: TyCtxt<'_, '_, 'tcx>, ty: Ty<'tcx>) -> &'tcx Self {
-        Self::from_scalar(tcx, Scalar::undef(), ty)
+        Self::from_primval(tcx, PrimVal::Undef, ty)
     }
 
     #[inline]
     pub fn from_bool(tcx: TyCtxt<'_, '_, 'tcx>, v: bool) -> &'tcx Self {
-        Self::from_bits(tcx, v as u128, ParamEnv::empty().and(tcx.types.bool))
+        Self::from_bits(tcx, v as u128, tcx.types.bool)
     }
 
     #[inline]
     pub fn from_usize(tcx: TyCtxt<'_, '_, 'tcx>, n: u64) -> &'tcx Self {
-        Self::from_bits(tcx, n as u128, ParamEnv::empty().and(tcx.types.usize))
+        Self::from_bits(tcx, n as u128, tcx.types.usize)
     }
 
     #[inline]
-    pub fn to_bits(
-        &self,
-        tcx: TyCtxt<'_, '_, 'tcx>,
-        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
-    ) -> Option<u128> {
-        if self.ty != ty.value {
+    pub fn to_bits(&self, ty: Ty<'_>) -> Option<u128> {
+        if self.ty != ty {
             return None;
         }
-        let ty = tcx.lift_to_global(&ty).unwrap();
-        let size = tcx.layout_of(ty).ok()?.size;
         match self.val {
-            ConstVal::Value(val) => val.to_bits(size),
+            ConstVal::Value(val) => val.to_bits(),
             _ => None,
         }
     }
 
     #[inline]
-    pub fn to_ptr(&self) -> Option<Pointer> {
+    pub fn to_ptr(&self) -> Option<MemoryPointer> {
         match self.val {
             ConstVal::Value(val) => val.to_ptr(),
             _ => None,
@@ -1967,39 +1838,25 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
-    pub fn to_byval_value(&self) -> Option<Value> {
+    pub fn to_primval(&self) -> Option<PrimVal> {
         match self.val {
-            ConstVal::Value(val) => val.to_byval_value(),
+            ConstVal::Value(val) => val.to_primval(),
             _ => None,
         }
     }
 
     #[inline]
-    pub fn to_scalar(&self) -> Option<Scalar> {
+    pub fn assert_bits(&self, ty: Ty<'_>) -> Option<u128> {
+        assert_eq!(self.ty, ty);
         match self.val {
-            ConstVal::Value(val) => val.to_scalar(),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn assert_bits(
-        &self,
-        tcx: TyCtxt<'_, '_, '_>,
-        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
-    ) -> Option<u128> {
-        assert_eq!(self.ty, ty.value);
-        let ty = tcx.lift_to_global(&ty).unwrap();
-        let size = tcx.layout_of(ty).ok()?.size;
-        match self.val {
-            ConstVal::Value(val) => val.to_bits(size),
+            ConstVal::Value(val) => val.to_bits(),
             _ => None,
         }
     }
 
     #[inline]
     pub fn assert_bool(&self, tcx: TyCtxt<'_, '_, '_>) -> Option<bool> {
-        self.assert_bits(tcx, ParamEnv::empty().and(tcx.types.bool)).and_then(|v| match v {
+        self.assert_bits(tcx.types.bool).and_then(|v| match v {
             0 => Some(false),
             1 => Some(true),
             _ => None,
@@ -2008,18 +1865,14 @@ impl<'tcx> Const<'tcx> {
 
     #[inline]
     pub fn assert_usize(&self, tcx: TyCtxt<'_, '_, '_>) -> Option<u64> {
-        self.assert_bits(tcx, ParamEnv::empty().and(tcx.types.usize)).map(|v| v as u64)
+        self.assert_bits(tcx.types.usize).map(|v| v as u64)
     }
 
     #[inline]
-    pub fn unwrap_bits(
-        &self,
-        tcx: TyCtxt<'_, '_, '_>,
-        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
-    ) -> u128 {
-        match self.assert_bits(tcx, ty) {
+    pub fn unwrap_bits(&self, ty: Ty<'_>) -> u128 {
+        match self.assert_bits(ty) {
             Some(val) => val,
-            None => bug!("expected bits of {}, got {:#?}", ty.value, self),
+            None => bug!("expected bits of {}, got {:#?}", ty, self),
         }
     }
 

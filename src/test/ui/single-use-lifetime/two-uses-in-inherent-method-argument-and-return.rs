@@ -11,7 +11,7 @@
 // Test that we DO NOT warn for a lifetime used twice in an impl method and
 // header.
 
-#![deny(single_use_lifetimes)]
+#![deny(single_use_lifetime)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 

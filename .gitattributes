@@ -4,7 +4,6 @@
 *.cpp rust
 *.h rust
 *.rs rust
-*.fixed linguist-language=Rust
 src/etc/installer/gfx/* binary
 *.woff binary
 src/vendor/** -text

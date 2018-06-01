@@ -506,8 +506,9 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
         }
 
         // Now comes the rote stuff:
-        hir::ExprRepeat(ref v, ref count) => {
-            let def_id = cx.tcx.hir.local_def_id(count.id);
+        hir::ExprRepeat(ref v, count) => {
+            let c = &cx.tcx.hir.body(count).value;
+            let def_id = cx.tcx.hir.body_owner_def_id(count);
             let substs = Substs::identity_for_item(cx.tcx.global_tcx(), def_id);
             let instance = ty::Instance::resolve(
                 cx.tcx.global_tcx(),
@@ -519,8 +520,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                 instance,
                 promoted: None
             };
-            let span = cx.tcx.def_span(def_id);
-            let count = match cx.tcx.at(span).const_eval(cx.param_env.and(global_id)) {
+            let count = match cx.tcx.at(c.span).const_eval(cx.param_env.and(global_id)) {
                 Ok(cv) => cv.unwrap_usize(cx.tcx),
                 Err(e) => {
                     e.report(cx.tcx, cx.tcx.def_span(def_id), "array length");
@@ -614,8 +614,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                                 let idx = adt_def.variant_index_with_id(variant_id);
                                 let (d, o) = adt_def.discriminant_def_for_variant(idx);
                                 use rustc::ty::util::IntTypeExt;
-                                let ty = adt_def.repr.discr_type();
-                                let ty = ty.to_ty(cx.tcx());
+                                let ty = adt_def.repr.discr_type().to_ty(cx.tcx());
                                 Some((d, o, ty))
                             }
                             _ => None,
@@ -635,11 +634,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                             },
                         },
                     }.to_ref();
-                    let offset = mk_const(ty::Const::from_bits(
-                        cx.tcx,
-                        offset as u128,
-                        cx.param_env.and(ty),
-                    ));
+                    let offset = mk_const(ty::Const::from_bits(cx.tcx, offset as u128, ty));
                     match did {
                         Some(did) => {
                             // in case we are offsetting from a computed discriminant

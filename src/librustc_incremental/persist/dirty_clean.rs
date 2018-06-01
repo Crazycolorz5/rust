@@ -453,20 +453,16 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
         out
     }
 
-    fn dep_nodes<'l>(
-        &self,
-        labels: &'l Labels,
-        def_id: DefId
-    ) -> impl Iterator<Item = DepNode> + 'l {
+    fn dep_nodes(&self, labels: &Labels, def_id: DefId) -> Vec<DepNode> {
+        let mut out = Vec::with_capacity(labels.len());
         let def_path_hash = self.tcx.def_path_hash(def_id);
-        labels
-            .iter()
-            .map(move |label| {
-                match DepNode::from_label_string(label, def_path_hash) {
-                    Ok(dep_node) => dep_node,
-                    Err(()) => unreachable!(),
-                }
-            })
+        for label in labels.iter() {
+            match DepNode::from_label_string(label, def_path_hash) {
+                Ok(dep_node) => out.push(dep_node),
+                Err(()) => unreachable!(),
+            }
+        }
+        out
     }
 
     fn dep_node_str(&self, dep_node: &DepNode) -> String {

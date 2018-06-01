@@ -47,7 +47,6 @@ impl RemoveNoopLandingPads {
     {
         for stmt in &mir[bb].statements {
             match stmt.kind {
-                StatementKind::ReadForMatch(_) |
                 StatementKind::StorageLive(_) |
                 StatementKind::StorageDead(_) |
                 StatementKind::EndRegion(_) |

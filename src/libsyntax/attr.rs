@@ -20,7 +20,7 @@ use ast::{MetaItem, MetaItemKind, NestedMetaItem, NestedMetaItemKind};
 use ast::{Lit, LitKind, Expr, ExprKind, Item, Local, Stmt, StmtKind};
 use codemap::{BytePos, Spanned, respan, dummy_spanned};
 use syntax_pos::Span;
-use errors::{Applicability, Handler};
+use errors::Handler;
 use feature_gate::{Features, GatedCfg};
 use parse::lexer::comments::{doc_comment_style, strip_doc_comment_decoration};
 use parse::parser::Parser;
@@ -1067,20 +1067,14 @@ pub fn find_repr_attrs(diagnostic: &Handler, attr: &Attribute) -> Vec<ReprAttr> 
                                     "incorrect `repr(align)` attribute format");
                                 match value.node {
                                     ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
-                                        err.span_suggestion_with_applicability(
-                                            item.span,
-                                            "use parentheses instead",
-                                            format!("align({})", int),
-                                            Applicability::MachineApplicable
-                                        );
+                                        err.span_suggestion(item.span,
+                                                            "use parentheses instead",
+                                                            format!("align({})", int));
                                     }
                                     ast::LitKind::Str(s, _) => {
-                                        err.span_suggestion_with_applicability(
-                                            item.span,
-                                            "use parentheses instead",
-                                            format!("align({})", s),
-                                            Applicability::MachineApplicable
-                                        );
+                                        err.span_suggestion(item.span,
+                                                            "use parentheses instead",
+                                                            format!("align({})", s));
                                     }
                                     _ => {}
                                 }

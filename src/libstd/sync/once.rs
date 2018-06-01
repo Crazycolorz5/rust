@@ -73,17 +73,16 @@ use thread::{self, Thread};
 /// A synchronization primitive which can be used to run a one-time global
 /// initialization. Useful for one-time initialization for FFI or related
 /// functionality. This type can only be constructed with the [`ONCE_INIT`]
-/// value or the equivalent [`Once::new`] constructor.
+/// value.
 ///
 /// [`ONCE_INIT`]: constant.ONCE_INIT.html
-/// [`Once::new`]: struct.Once.html#method.new
 ///
 /// # Examples
 ///
 /// ```
-/// use std::sync::Once;
+/// use std::sync::{Once, ONCE_INIT};
 ///
-/// static START: Once = Once::new();
+/// static START: Once = ONCE_INIT;
 ///
 /// START.call_once(|| {
 ///     // run initialization here
@@ -181,10 +180,10 @@ impl Once {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Once;
+    /// use std::sync::{Once, ONCE_INIT};
     ///
     /// static mut VAL: usize = 0;
-    /// static INIT: Once = Once::new();
+    /// static INIT: Once = ONCE_INIT;
     ///
     /// // Accessing a `static mut` is unsafe much of the time, but if we do so
     /// // in a synchronized fashion (e.g. write once or read all) then we're
@@ -249,10 +248,10 @@ impl Once {
     /// ```
     /// #![feature(once_poison)]
     ///
-    /// use std::sync::Once;
+    /// use std::sync::{Once, ONCE_INIT};
     /// use std::thread;
     ///
-    /// static INIT: Once = Once::new();
+    /// static INIT: Once = ONCE_INIT;
     ///
     /// // poison the once
     /// let handle = thread::spawn(|| {
@@ -432,10 +431,10 @@ impl OnceState {
     /// ```
     /// #![feature(once_poison)]
     ///
-    /// use std::sync::Once;
+    /// use std::sync::{Once, ONCE_INIT};
     /// use std::thread;
     ///
-    /// static INIT: Once = Once::new();
+    /// static INIT: Once = ONCE_INIT;
     ///
     /// // poison the once
     /// let handle = thread::spawn(|| {
@@ -453,9 +452,9 @@ impl OnceState {
     /// ```
     /// #![feature(once_poison)]
     ///
-    /// use std::sync::Once;
+    /// use std::sync::{Once, ONCE_INIT};
     ///
-    /// static INIT: Once = Once::new();
+    /// static INIT: Once = ONCE_INIT;
     ///
     /// INIT.call_once_force(|state| {
     ///     assert!(!state.poisoned());

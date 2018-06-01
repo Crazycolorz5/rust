@@ -35,7 +35,7 @@ use mir::mono::Linkage;
 use syntax_pos::{Span, DUMMY_SP};
 use syntax::codemap::{self, Spanned};
 use rustc_target::spec::abi::Abi;
-use syntax::ast::{self, Ident, Name, NodeId, DUMMY_NODE_ID, AsmDialect};
+use syntax::ast::{self, Name, NodeId, DUMMY_NODE_ID, AsmDialect};
 use syntax::ast::{Attribute, Lit, StrStyle, FloatTy, IntTy, UintTy, MetaItem};
 use syntax::attr::InlineAttr;
 use syntax::ext::hygiene::SyntaxContext;
@@ -598,18 +598,6 @@ pub struct WhereClause {
     pub predicates: HirVec<WherePredicate>,
 }
 
-impl WhereClause {
-    pub fn span(&self) -> Option<Span> {
-        self.predicates.iter().map(|predicate| predicate.span())
-            .fold(None, |acc, i| match (acc, i) {
-                (None, i) => Some(i),
-                (Some(acc), i) => {
-                    Some(acc.to(i))
-                }
-            })
-    }
-}
-
 /// A single predicate in a `where` clause
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub enum WherePredicate {
@@ -866,7 +854,7 @@ impl Pat {
 pub struct FieldPat {
     pub id: NodeId,
     /// The identifier for the field
-    pub ident: Ident,
+    pub name: Name,
     /// The pattern the field is destructured to
     pub pat: P<Pat>,
     pub is_shorthand: bool,
@@ -942,7 +930,7 @@ pub enum PatKind {
     Slice(HirVec<P<Pat>>, Option<P<Pat>>, HirVec<P<Pat>>),
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
+#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
 pub enum Mutability {
     MutMutable,
     MutImmutable,
@@ -1211,7 +1199,7 @@ pub struct Arm {
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub struct Field {
     pub id: NodeId,
-    pub ident: Ident,
+    pub name: Spanned<Name>,
     pub expr: P<Expr>,
     pub span: Span,
     pub is_shorthand: bool,
@@ -1282,18 +1270,6 @@ pub enum BodyOwnerKind {
 
     /// Initializer of a `static` item.
     Static(Mutability),
-}
-
-/// A constant (expression) that's not an item or associated item,
-/// but needs its own `DefId` for type-checking, const-eval, etc.
-/// These are usually found nested inside types (e.g. array lengths)
-/// or expressions (e.g. repeat counts), and also used to define
-/// explicit discriminant values for enum variants.
-#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
-pub struct AnonConst {
-    pub id: NodeId,
-    pub hir_id: HirId,
-    pub body: BodyId,
 }
 
 /// An expression
@@ -1414,7 +1390,7 @@ pub enum Expr_ {
     /// For example, `a += 1`.
     ExprAssignOp(BinOp, P<Expr>, P<Expr>),
     /// Access of a named (`obj.foo`) or unnamed (`obj.0`) struct or tuple field
-    ExprField(P<Expr>, Ident),
+    ExprField(P<Expr>, Spanned<Name>),
     /// An indexing operation (`foo[2]`)
     ExprIndex(P<Expr>, P<Expr>),
 
@@ -1443,7 +1419,7 @@ pub enum Expr_ {
     ///
     /// For example, `[1; 5]`. The first expression is the element
     /// to be repeated; the second is the number of times to repeat it.
-    ExprRepeat(P<Expr>, AnonConst),
+    ExprRepeat(P<Expr>, BodyId),
 
     /// A suspension point for generators. This is `yield <expr>` in Rust.
     ExprYield(P<Expr>),
@@ -1535,7 +1511,7 @@ pub struct Destination {
     pub target_id: Result<NodeId, LoopIdError>,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
+#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
 pub enum GeneratorMovability {
     Static,
     Movable,
@@ -1701,7 +1677,7 @@ pub enum Ty_ {
     /// A variable length slice (`[T]`)
     TySlice(P<Ty>),
     /// A fixed length array (`[T; n]`)
-    TyArray(P<Ty>, AnonConst),
+    TyArray(P<Ty>, BodyId),
     /// A raw pointer (`*const T` or `*mut T`)
     TyPtr(MutTy),
     /// A reference (`&'a T` or `&'a mut T`)
@@ -1733,7 +1709,7 @@ pub enum Ty_ {
     /// so they are resolved directly through the parent `Generics`.
     TyImplTraitExistential(ExistTy, HirVec<Lifetime>),
     /// Unused for now
-    TyTypeof(AnonConst),
+    TyTypeof(BodyId),
     /// TyInfer means the type should be inferred instead of it having been
     /// specified. This can appear anywhere in a type.
     TyInfer,
@@ -1787,7 +1763,7 @@ pub enum IsAuto {
     No
 }
 
-#[derive(Copy, Clone, PartialEq, Eq,PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub enum Unsafety {
     Unsafe,
     Normal,
@@ -1906,7 +1882,7 @@ pub struct Variant_ {
     pub attrs: HirVec<Attribute>,
     pub data: VariantData,
     /// Explicit discriminant, eg `Foo = 1`
-    pub disr_expr: Option<AnonConst>,
+    pub disr_expr: Option<BodyId>,
 }
 
 pub type Variant = Spanned<Variant_>;
@@ -1973,7 +1949,7 @@ impl Visibility {
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub struct StructField {
     pub span: Span,
-    pub ident: Ident,
+    pub name: Name,
     pub vis: Visibility,
     pub id: NodeId,
     pub ty: P<Ty>,
@@ -1983,7 +1959,7 @@ pub struct StructField {
 impl StructField {
     // Still necessary in couple of places
     pub fn is_positional(&self) -> bool {
-        let first = self.ident.as_str().as_bytes()[0];
+        let first = self.name.as_str().as_bytes()[0];
         first >= b'0' && first <= b'9'
     }
 }

@@ -83,7 +83,7 @@ impl ArgAttributes {
     pub fn new() -> Self {
         ArgAttributes {
             regular: ArgAttribute::default(),
-            pointee_size: Size::ZERO,
+            pointee_size: Size::from_bytes(0),
             pointee_align: None,
         }
     }
@@ -206,7 +206,7 @@ impl From<Uniform> for CastTarget {
     fn from(uniform: Uniform) -> CastTarget {
         CastTarget {
             prefix: [None; 8],
-            prefix_chunk: Size::ZERO,
+            prefix_chunk: Size::from_bytes(0),
             rest: uniform
         }
     }
@@ -256,7 +256,8 @@ impl<'a, Ty> TyLayout<'a, Ty> {
                 let kind = match scalar.value {
                     abi::Int(..) |
                     abi::Pointer => RegKind::Integer,
-                    abi::Float(_) => RegKind::Float,
+                    abi::F32 |
+                    abi::F64 => RegKind::Float
                 };
                 Some(Reg {
                     kind,
@@ -273,7 +274,7 @@ impl<'a, Ty> TyLayout<'a, Ty> {
 
             Abi::ScalarPair(..) |
             Abi::Aggregate { .. } => {
-                let mut total = Size::ZERO;
+                let mut total = Size::from_bytes(0);
                 let mut result = None;
 
                 let is_union = match self.fields {

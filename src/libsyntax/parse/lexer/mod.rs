@@ -11,7 +11,7 @@
 use ast::{self, Ident};
 use syntax_pos::{self, BytePos, CharPos, Pos, Span, NO_EXPANSION};
 use codemap::{CodeMap, FilePathMapping};
-use errors::{Applicability, FatalError, DiagnosticBuilder};
+use errors::{FatalError, DiagnosticBuilder};
 use parse::{token, ParseSess};
 use str::char_at;
 use symbol::{Symbol, keywords};
@@ -34,10 +34,7 @@ pub struct TokenAndSpan {
 
 impl Default for TokenAndSpan {
     fn default() -> Self {
-        TokenAndSpan {
-            tok: token::Whitespace,
-            sp: syntax_pos::DUMMY_SP,
-        }
+        TokenAndSpan { tok: token::Whitespace, sp: syntax_pos::DUMMY_SP }
     }
 }
 
@@ -57,9 +54,8 @@ pub struct StringReader<'a> {
     /// If part of a filemap is being re-lexed, this should be set to false.
     pub save_new_lines_and_multibyte: bool,
     // cached:
-    peek_tok: token::Token,
-    peek_span: Span,
-    peek_span_src_raw: Span,
+    pub peek_tok: token::Token,
+    pub peek_span: Span,
     pub fatal_errs: Vec<DiagnosticBuilder<'a>>,
     // cache a direct reference to the source text, so that we don't have to
     // retrieve it via `self.filemap.src.as_ref().unwrap()` all the time.
@@ -67,20 +63,13 @@ pub struct StringReader<'a> {
     /// Stack of open delimiters and their spans. Used for error message.
     token: token::Token,
     span: Span,
-    /// The raw source span which *does not* take `override_span` into account
-    span_src_raw: Span,
     open_braces: Vec<(token::DelimToken, Span)>,
     pub override_span: Option<Span>,
 }
 
 impl<'a> StringReader<'a> {
     fn mk_sp(&self, lo: BytePos, hi: BytePos) -> Span {
-        self.mk_sp_and_raw(lo, hi).0
-    }
-    fn mk_sp_and_raw(&self, lo: BytePos, hi: BytePos) -> (Span, Span) {
-        let raw = Span::new(lo, hi, NO_EXPANSION);
-        let real = unwrap_or!(self.override_span, raw);
-        (real, raw)
+        unwrap_or!(self.override_span, Span::new(lo, hi, NO_EXPANSION))
     }
     fn mk_ident(&self, string: &str) -> Ident {
         let mut ident = Ident::from_str(string);
@@ -132,7 +121,6 @@ impl<'a> StringReader<'a> {
             sp: self.peek_span,
         };
         self.advance_token()?;
-        self.span_src_raw = self.peek_span_src_raw;
         Ok(ret_val)
     }
 
@@ -167,15 +155,13 @@ impl<'a> StringReader<'a> {
 
 impl<'a> StringReader<'a> {
     /// For comments.rs, which hackily pokes into next_pos and ch
-    pub fn new_raw(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>,
-                   override_span: Option<Span>) -> Self {
-        let mut sr = StringReader::new_raw_internal(sess, filemap, override_span);
+    pub fn new_raw(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>) -> Self {
+        let mut sr = StringReader::new_raw_internal(sess, filemap);
         sr.bump();
         sr
     }
 
-    fn new_raw_internal(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>,
-                        override_span: Option<Span>) -> Self {
+    fn new_raw_internal(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>) -> Self {
         if filemap.src.is_none() {
             sess.span_diagnostic.bug(&format!("Cannot lex filemap without source: {}",
                                               filemap.name));
@@ -194,20 +180,17 @@ impl<'a> StringReader<'a> {
             // dummy values; not read
             peek_tok: token::Eof,
             peek_span: syntax_pos::DUMMY_SP,
-            peek_span_src_raw: syntax_pos::DUMMY_SP,
             src,
             fatal_errs: Vec::new(),
             token: token::Eof,
             span: syntax_pos::DUMMY_SP,
-            span_src_raw: syntax_pos::DUMMY_SP,
             open_braces: Vec::new(),
-            override_span,
+            override_span: None,
         }
     }
 
-    pub fn new(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>, override_span: Option<Span>)
-               -> Self {
-        let mut sr = StringReader::new_raw(sess, filemap, override_span);
+    pub fn new(sess: &'a ParseSess, filemap: Lrc<syntax_pos::FileMap>) -> Self {
+        let mut sr = StringReader::new_raw(sess, filemap);
         if sr.advance_token().is_err() {
             sr.emit_fatal_errors();
             FatalError.raise();
@@ -224,7 +207,7 @@ impl<'a> StringReader<'a> {
             span = span.shrink_to_lo();
         }
 
-        let mut sr = StringReader::new_raw_internal(sess, begin.fm, None);
+        let mut sr = StringReader::new_raw_internal(sess, begin.fm);
 
         // Seek the lexer to the right byte range.
         sr.save_new_lines_and_multibyte = false;
@@ -342,25 +325,17 @@ impl<'a> StringReader<'a> {
     fn advance_token(&mut self) -> Result<(), ()> {
         match self.scan_whitespace_or_comment() {
             Some(comment) => {
-                self.peek_span_src_raw = comment.sp;
                 self.peek_span = comment.sp;
                 self.peek_tok = comment.tok;
             }
             None => {
                 if self.is_eof() {
                     self.peek_tok = token::Eof;
-                    let (real, raw) = self.mk_sp_and_raw(
-                        self.filemap.end_pos,
-                        self.filemap.end_pos,
-                    );
-                    self.peek_span = real;
-                    self.peek_span_src_raw = raw;
+                    self.peek_span = self.mk_sp(self.filemap.end_pos, self.filemap.end_pos);
                 } else {
                     let start_bytepos = self.pos;
                     self.peek_tok = self.next_token_inner()?;
-                    let (real, raw) = self.mk_sp_and_raw(start_bytepos, self.pos);
-                    self.peek_span = real;
-                    self.peek_span_src_raw = raw;
+                    self.peek_span = self.mk_sp(start_bytepos, self.pos);
                 };
             }
         }
@@ -516,7 +491,6 @@ impl<'a> StringReader<'a> {
             return None;
         }
         let start = self.pos;
-        self.bump();
         while ident_continue(self.ch) {
             self.bump();
         }
@@ -1076,18 +1050,9 @@ impl<'a> StringReader<'a> {
                 self.bump();
             }
             if self.scan_digits(10, 10) == 0 {
-                let mut err = self.struct_span_fatal(
-                    self.pos, self.next_pos,
-                    "expected at least one digit in exponent"
-                );
-                if let Some(ch) = self.ch {
-                    // check for e.g. Unicode minus '−' (Issue #49746)
-                    if unicode_chars::check_for_substitution(self, ch, &mut err) {
-                        self.bump();
-                        self.scan_digits(10, 10);
-                    }
-                }
-                err.emit();
+                self.err_span_(self.pos,
+                               self.next_pos,
+                               "expected at least one digit in exponent")
             }
         }
     }
@@ -1156,7 +1121,6 @@ impl<'a> StringReader<'a> {
                 }
 
                 let start = self.pos;
-                self.bump();
                 while ident_continue(self.ch) {
                     self.bump();
                 }
@@ -1302,7 +1266,11 @@ impl<'a> StringReader<'a> {
                     }
                     '-' => {
                         self.bump();
-                        Ok(token::LArrow)
+                        match self.ch.unwrap_or('\x00') {
+                            _ => {
+                                Ok(token::LArrow)
+                            }
+                        }
                     }
                     _ => {
                         Ok(token::Lt)
@@ -1377,12 +1345,11 @@ impl<'a> StringReader<'a> {
                             self.sess.span_diagnostic
                                 .struct_span_err(span,
                                                  "character literal may only contain one codepoint")
-                                .span_suggestion_with_applicability(
-                                    span,
-                                    "if you meant to write a `str` literal, use double quotes",
-                                    format!("\"{}\"", &self.src[start..end]),
-                                    Applicability::MachineApplicable
-                                ).emit();
+                                .span_suggestion(span,
+                                                 "if you meant to write a `str` literal, \
+                                                  use double quotes",
+                                                 format!("\"{}\"", &self.src[start..end]))
+                                .emit();
                             return Ok(token::Literal(token::Str_(Symbol::intern("??")), None))
                         }
                         if self.ch_is('\n') || self.is_eof() || self.ch_is('/') {
@@ -1828,7 +1795,7 @@ mod tests {
                  teststr: String)
                  -> StringReader<'a> {
         let fm = cm.new_filemap(PathBuf::from("zebra.rs").into(), teststr);
-        StringReader::new(sess, fm, None)
+        StringReader::new(sess, fm)
     }
 
     #[test]

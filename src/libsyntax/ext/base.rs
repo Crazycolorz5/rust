@@ -572,16 +572,6 @@ pub enum MacroKind {
     Derive,
 }
 
-impl MacroKind {
-    pub fn descr(self) -> &'static str {
-        match self {
-            MacroKind::Bang => "macro",
-            MacroKind::Attr => "attribute macro",
-            MacroKind::Derive => "derive macro",
-        }
-    }
-}
-
 /// An enum representing the different kinds of syntax extensions.
 pub enum SyntaxExtension {
     /// A syntax extension that is attached to an item and creates new items

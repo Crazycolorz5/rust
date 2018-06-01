@@ -9,7 +9,6 @@
 // except according to those terms.
 
 #![feature(label_break_value)]
-#![allow(unused_labels)]
 
 // Simple continue pointing to an unlabeled break should yield in an error
 fn continue_simple() {

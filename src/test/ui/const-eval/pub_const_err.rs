@@ -9,7 +9,6 @@
 // except according to those terms.
 
 // compile-pass
-#![warn(const_err)]
 
 #![crate_type = "lib"]
 

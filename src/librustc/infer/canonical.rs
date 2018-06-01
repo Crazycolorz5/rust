@@ -256,11 +256,11 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
 
                     CanonicalTyVarKind::Float => self.tcx.mk_float_var(self.next_float_var_id()),
                 };
-                ty.into()
+                Kind::from(ty)
             }
 
             CanonicalVarKind::Region => {
-                self.next_region_var(RegionVariableOrigin::MiscVariable(span)).into()
+                Kind::from(self.next_region_var(RegionVariableOrigin::MiscVariable(span)))
             }
         }
     }
@@ -555,7 +555,7 @@ impl<'cx, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for Canonicalizer<'cx, 'gcx, 'tcx> 
                      opportunistically resolved to {:?}",
                     vid, r
                 );
-                let cvar = self.canonical_var(info, r.into());
+                let cvar = self.canonical_var(info, Kind::from(r));
                 self.tcx().mk_region(ty::ReCanonical(cvar))
             }
 
@@ -570,7 +570,7 @@ impl<'cx, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for Canonicalizer<'cx, 'gcx, 'tcx> 
                     let info = CanonicalVarInfo {
                         kind: CanonicalVarKind::Region,
                     };
-                    let cvar = self.canonical_var(info, r.into());
+                    let cvar = self.canonical_var(info, Kind::from(r));
                     self.tcx().mk_region(ty::ReCanonical(cvar))
                 } else {
                     r
@@ -750,7 +750,7 @@ impl<'cx, 'gcx, 'tcx> Canonicalizer<'cx, 'gcx, 'tcx> {
             let info = CanonicalVarInfo {
                 kind: CanonicalVarKind::Ty(ty_kind),
             };
-            let cvar = self.canonical_var(info, ty_var.into());
+            let cvar = self.canonical_var(info, Kind::from(ty_var));
             self.tcx().mk_infer(ty::InferTy::CanonicalTy(cvar))
         }
     }

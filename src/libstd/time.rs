@@ -271,6 +271,7 @@ impl SystemTime {
     /// # Examples
     ///
     /// ```no_run
+    /// #![feature(assoc_unix_epoch)]
     /// use std::time::SystemTime;
     ///
     /// match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
@@ -278,7 +279,7 @@ impl SystemTime {
     ///     Err(_) => panic!("SystemTime before UNIX EPOCH!"),
     /// }
     /// ```
-    #[stable(feature = "assoc_unix_epoch", since = "1.28.0")]
+    #[unstable(feature = "assoc_unix_epoch", issue = "49502")]
     pub const UNIX_EPOCH: SystemTime = UNIX_EPOCH;
 
     /// Returns the system time corresponding to "now".

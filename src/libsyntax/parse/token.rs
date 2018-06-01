@@ -22,7 +22,6 @@ use serialize::{Decodable, Decoder, Encodable, Encoder};
 use symbol::keywords;
 use syntax::parse::parse_stream_from_source_str;
 use syntax_pos::{self, Span, FileName};
-use syntax_pos::symbol::{self, Symbol};
 use tokenstream::{TokenStream, TokenTree};
 use tokenstream;
 
@@ -341,7 +340,7 @@ impl Token {
     /// string slice.
     pub fn is_ident_named(&self, name: &str) -> bool {
         match self.ident() {
-            Some((ident, _)) => ident.as_str() == name,
+            Some((ident, _)) => ident.name.as_str() == name,
             None => false
         }
     }
@@ -479,13 +478,7 @@ impl Token {
                 _ => return None,
             },
             SingleQuote => match joint {
-                Ident(ident, false) => {
-                    let name = Symbol::intern(&format!("'{}", ident));
-                    Lifetime(symbol::Ident {
-                        name,
-                        span: ident.span,
-                    })
-                }
+                Ident(ident, false) => Lifetime(ident),
                 _ => return None,
             },
 
@@ -588,8 +581,6 @@ impl Token {
             if tokens.probably_equal_for_proc_macro(&tokens_for_real) {
                 return tokens
             }
-            info!("cached tokens found, but they're not \"probably equal\", \
-                   going with stringified version");
         }
         return tokens_for_real
     }

@@ -21,14 +21,11 @@
 # - UnicodeData.txt
 #
 # Since this should not require frequent updates, we just store this
-# out-of-line and check the tables.rs file into git.
+# out-of-line and check the unicode.rs file into git.
 
-import fileinput, re, os, sys, operator, math, datetime
+import fileinput, re, os, sys, operator, math
 
-# The directory in which this file resides.
-fdir = os.path.dirname(os.path.realpath(__file__)) + "/"
-
-preamble = '''// Copyright 2012-{year} The Rust Project Developers. See the COPYRIGHT
+preamble = '''// Copyright 2012-2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -43,8 +40,8 @@ preamble = '''// Copyright 2012-{year} The Rust Project Developers. See the COPY
 #![allow(missing_docs, non_upper_case_globals, non_snake_case)]
 
 use unicode::version::UnicodeVersion;
-use unicode::bool_trie::{{BoolTrie, SmallBoolTrie}};
-'''.format(year = datetime.datetime.now().year)
+use unicode::bool_trie::{BoolTrie, SmallBoolTrie};
+'''
 
 # Mapping taken from Table 12 from:
 # http://www.unicode.org/reports/tr44/#General_Category_Values
@@ -64,11 +61,11 @@ expanded_categories = {
 surrogate_codepoints = (0xd800, 0xdfff)
 
 def fetch(f):
-    path = fdir + os.path.basename(f)
-    if not os.path.exists(path):
-        os.system("curl -o {0}{1} ftp://ftp.unicode.org/Public/UNIDATA/{1}".format(fdir, f))
+    if not os.path.exists(os.path.basename(f)):
+        os.system("curl -O http://www.unicode.org/Public/UNIDATA/%s"
+                  % f)
 
-    if not os.path.exists(path):
+    if not os.path.exists(os.path.basename(f)):
         sys.stderr.write("cannot load %s" % f)
         exit(1)
 
@@ -87,7 +84,7 @@ def load_unicode_data(f):
 
     udict = {}
     range_start = -1
-    for line in fileinput.input(fdir + f):
+    for line in fileinput.input(f):
         data = line.split(';')
         if len(data) != 15:
             continue
@@ -159,7 +156,7 @@ def load_unicode_data(f):
 
 def load_special_casing(f, to_upper, to_lower, to_title):
     fetch(f)
-    for line in fileinput.input(fdir + f):
+    for line in fileinput.input(f):
         data = line.split('#')[0].split(';')
         if len(data) == 5:
             code, lower, title, upper, _comment = data
@@ -246,7 +243,7 @@ def load_properties(f, interestingprops):
     re1 = re.compile("^ *([0-9A-F]+) *; *(\w+)")
     re2 = re.compile("^ *([0-9A-F]+)\.\.([0-9A-F]+) *; *(\w+)")
 
-    for line in fileinput.input(fdir + os.path.basename(f)):
+    for line in fileinput.input(os.path.basename(f)):
         prop = None
         d_lo = 0
         d_hi = 0
@@ -459,7 +456,7 @@ def emit_norm_module(f, canon, compat, combine, norm_props):
     canon_comp_keys = sorted(canon_comp.keys())
 
 if __name__ == "__main__":
-    r = fdir + "tables.rs"
+    r = "tables.rs"
     if os.path.exists(r):
         os.remove(r)
     with open(r, "w") as rf:
@@ -468,7 +465,7 @@ if __name__ == "__main__":
 
         # download and parse all the data
         fetch("ReadMe.txt")
-        with open(fdir + "ReadMe.txt") as readme:
+        with open("ReadMe.txt") as readme:
             pattern = "for Version (\d+)\.(\d+)\.(\d+) of the Unicode"
             unicode_version = re.search(pattern, readme.read()).groups()
         rf.write("""
@@ -486,7 +483,7 @@ pub const UNICODE_VERSION: UnicodeVersion = UnicodeVersion {
                 to_upper, to_lower, to_title) = load_unicode_data("UnicodeData.txt")
         load_special_casing("SpecialCasing.txt", to_upper, to_lower, to_title)
         want_derived = ["XID_Start", "XID_Continue", "Alphabetic", "Lowercase", "Uppercase",
-                        "Cased", "Case_Ignorable", "Grapheme_Extend"]
+                        "Cased", "Case_Ignorable"]
         derived = load_properties("DerivedCoreProperties.txt", want_derived)
         scripts = load_properties("Scripts.txt", [])
         props = load_properties("PropList.txt",
@@ -503,4 +500,3 @@ pub const UNICODE_VERSION: UnicodeVersion = UnicodeVersion {
         # normalizations and conversions module
         emit_norm_module(rf, canon_decomp, compat_decomp, combines, norm_props)
         emit_conversions_module(rf, to_upper, to_lower, to_title)
-    print("Regenerated tables.rs.")

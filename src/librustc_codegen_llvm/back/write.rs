@@ -1738,9 +1738,7 @@ fn start_executing_work(tcx: TyCtxt,
                             .binary_search_by_key(&cost, |&(_, cost)| cost)
                             .unwrap_or_else(|e| e);
                         work_items.insert(insertion_index, (work, cost));
-                        if !cgcx.opts.debugging_opts.no_parallel_llvm {
-                            helper.request_token();
-                        }
+                        helper.request_token();
                     }
                 }
 
@@ -1844,9 +1842,7 @@ fn start_executing_work(tcx: TyCtxt,
                     };
                     work_items.insert(insertion_index, (llvm_work_item, cost));
 
-                    if !cgcx.opts.debugging_opts.no_parallel_llvm {
-                        helper.request_token();
-                    }
+                    helper.request_token();
                     assert_eq!(main_thread_worker_state,
                                MainThreadWorkerState::Codegenning);
                     main_thread_worker_state = MainThreadWorkerState::Idle;

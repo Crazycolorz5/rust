@@ -427,12 +427,12 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::FieldPat {
                                           hasher: &mut StableHasher<W>) {
         let hir::FieldPat {
             id: _,
-            ident,
+            name,
             ref pat,
             is_shorthand,
         } = *self;
 
-        ident.hash_stable(hcx, hasher);
+        name.hash_stable(hcx, hasher);
         pat.hash_stable(hcx, hasher);
         is_shorthand.hash_stable(hcx, hasher);
     }
@@ -525,13 +525,13 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::Field {
                                           hasher: &mut StableHasher<W>) {
         let hir::Field {
             id: _,
-            ident,
+            name,
             ref expr,
             span,
             is_shorthand,
         } = *self;
 
-        ident.hash_stable(hcx, hasher);
+        name.hash_stable(hcx, hasher);
         expr.hash_stable(hcx, hasher);
         span.hash_stable(hcx, hasher);
         is_shorthand.hash_stable(hcx, hasher);
@@ -551,12 +551,6 @@ impl_stable_hash_for!(enum hir::BlockCheckMode {
 impl_stable_hash_for!(enum hir::UnsafeSource {
     CompilerGenerated,
     UserProvided
-});
-
-impl_stable_hash_for!(struct hir::AnonConst {
-    id,
-    hir_id,
-    body
 });
 
 impl<'a> HashStable<StableHashingContext<'a>> for hir::Expr {
@@ -598,7 +592,7 @@ impl_stable_hash_for!(enum hir::Expr_ {
     ExprBlock(blk, label),
     ExprAssign(lhs, rhs),
     ExprAssignOp(op, lhs, rhs),
-    ExprField(owner, ident),
+    ExprField(owner, field_name),
     ExprIndex(lhs, rhs),
     ExprPath(path),
     ExprAddrOf(mutability, sub),
@@ -835,7 +829,7 @@ impl_stable_hash_for!(enum hir::UseKind {
 
 impl_stable_hash_for!(struct hir::StructField {
     span,
-    ident,
+    name,
     vis,
     id,
     ty,

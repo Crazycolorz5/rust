@@ -196,14 +196,14 @@ use rustc::hir::def_id::DefId;
 use rustc::middle::const_val::ConstVal;
 use rustc::mir::interpret::{AllocId, ConstValue};
 use rustc::middle::lang_items::{ExchangeMallocFnLangItem, StartFnLangItem};
-use rustc::ty::subst::Substs;
+use rustc::ty::subst::{Substs, Kind};
 use rustc::ty::{self, TypeFoldable, Ty, TyCtxt, GenericParamDefKind};
 use rustc::ty::adjustment::CustomCoerceUnsized;
 use rustc::session::config;
 use rustc::mir::{self, Location, Promoted};
 use rustc::mir::visit::Visitor as MirVisitor;
 use rustc::mir::mono::MonoItem;
-use rustc::mir::interpret::{Scalar, GlobalId, AllocType};
+use rustc::mir::interpret::{PrimVal, GlobalId};
 
 use monomorphize::{self, Instance};
 use rustc::util::nodemap::{FxHashSet, FxHashMap, DefIdMap};
@@ -1067,7 +1067,7 @@ impl<'b, 'a, 'v> RootCollector<'b, 'a, 'v> {
             self.tcx,
             ty::ParamEnv::reveal_all(),
             start_def_id,
-            self.tcx.intern_substs(&[main_ret_ty.into()])
+            self.tcx.intern_substs(&[Kind::from(main_ret_ty)])
         ).unwrap();
 
         self.output.push(create_fn_mono_item(start_instance));
@@ -1115,7 +1115,7 @@ fn create_mono_items_for_default_impls<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                     let substs = Substs::for_item(tcx, method.def_id, |param, _| {
                         match param.kind {
                             GenericParamDefKind::Lifetime => tcx.types.re_erased.into(),
-                            GenericParamDefKind::Type {..} => {
+                            GenericParamDefKind::Type(_) => {
                                 trait_ref.substs[param.index as usize]
                             }
                         }
@@ -1146,28 +1146,24 @@ fn collect_miri<'a, 'tcx>(
     alloc_id: AllocId,
     output: &mut Vec<MonoItem<'tcx>>,
 ) {
-    let alloc_type = tcx.alloc_map.lock().get(alloc_id);
-    match alloc_type {
-        Some(AllocType::Static(did)) => {
-            let instance = Instance::mono(tcx, did);
-            if should_monomorphize_locally(tcx, &instance) {
-                trace!("collecting static {:?}", did);
-                output.push(MonoItem::Static(did));
-            }
+    if let Some(did) = tcx.interpret_interner.get_static(alloc_id) {
+        let instance = Instance::mono(tcx, did);
+        if should_monomorphize_locally(tcx, &instance) {
+            trace!("collecting static {:?}", did);
+            output.push(MonoItem::Static(did));
         }
-        Some(AllocType::Memory(alloc)) => {
-            trace!("collecting {:?} with {:#?}", alloc_id, alloc);
-            for &inner in alloc.relocations.values() {
-                collect_miri(tcx, inner, output);
-            }
-        },
-        Some(AllocType::Function(fn_instance)) => {
-            if should_monomorphize_locally(tcx, &fn_instance) {
-                trace!("collecting {:?} with {:#?}", alloc_id, fn_instance);
-                output.push(create_fn_mono_item(fn_instance));
-            }
+    } else if let Some(alloc) = tcx.interpret_interner.get_alloc(alloc_id) {
+        trace!("collecting {:?} with {:#?}", alloc_id, alloc);
+        for &inner in alloc.relocations.values() {
+            collect_miri(tcx, inner, output);
         }
-        None => bug!("alloc id without corresponding allocation: {}", alloc_id),
+    } else if let Some(fn_instance) = tcx.interpret_interner.get_fn(alloc_id) {
+        if should_monomorphize_locally(tcx, &fn_instance) {
+            trace!("collecting {:?} with {:#?}", alloc_id, fn_instance);
+            output.push(create_fn_mono_item(fn_instance));
+        }
+    } else {
+        bug!("alloc id without corresponding allocation: {}", alloc_id);
     }
 }
 
@@ -1245,15 +1241,15 @@ fn collect_const<'a, 'tcx>(
     };
     match val {
         ConstVal::Unevaluated(..) => bug!("const eval yielded unevaluated const"),
-        ConstVal::Value(ConstValue::ScalarPair(Scalar::Ptr(a), Scalar::Ptr(b))) => {
+        ConstVal::Value(ConstValue::ByValPair(PrimVal::Ptr(a), PrimVal::Ptr(b))) => {
             collect_miri(tcx, a.alloc_id, output);
             collect_miri(tcx, b.alloc_id, output);
         }
-        ConstVal::Value(ConstValue::ScalarPair(_, Scalar::Ptr(ptr))) |
-        ConstVal::Value(ConstValue::ScalarPair(Scalar::Ptr(ptr), _)) |
-        ConstVal::Value(ConstValue::Scalar(Scalar::Ptr(ptr))) =>
+        ConstVal::Value(ConstValue::ByValPair(_, PrimVal::Ptr(ptr))) |
+        ConstVal::Value(ConstValue::ByValPair(PrimVal::Ptr(ptr), _)) |
+        ConstVal::Value(ConstValue::ByVal(PrimVal::Ptr(ptr))) =>
             collect_miri(tcx, ptr.alloc_id, output),
-        ConstVal::Value(ConstValue::ByRef(alloc, _offset)) => {
+        ConstVal::Value(ConstValue::ByRef(alloc)) => {
             for &id in alloc.relocations.values() {
                 collect_miri(tcx, id, output);
             }

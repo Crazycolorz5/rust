@@ -181,9 +181,7 @@ impl<'a, 'tcx> MatchVisitor<'a, 'tcx> {
             // Second, if there is a guard on each arm, make sure it isn't
             // assigning or borrowing anything mutably.
             if let Some(ref guard) = arm.guard {
-                if self.tcx.check_for_mutation_in_guard_via_ast_walk() {
-                    check_for_mutation_in_guard(self, &guard);
-                }
+                check_for_mutation_in_guard(self, &guard);
             }
 
             // Third, perform some lints.
@@ -501,7 +499,8 @@ fn check_legality_of_move_bindings(cx: &MatchVisitor,
                                    pats: &[P<Pat>]) {
     let mut by_ref_span = None;
     for pat in pats {
-        pat.each_binding(|_, hir_id, span, _path| {
+        pat.each_binding(|_, id, span, _path| {
+            let hir_id = cx.tcx.hir.node_to_hir_id(id);
             let bm = *cx.tables
                         .pat_binding_modes()
                         .get(hir_id)

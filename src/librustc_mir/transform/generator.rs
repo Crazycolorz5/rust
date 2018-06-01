@@ -181,7 +181,7 @@ impl<'a, 'tcx> TransformVisitor<'a, 'tcx> {
                 value: ty::Const::from_bits(
                     self.tcx,
                     state_disc.into(),
-                    ty::ParamEnv::empty().and(self.tcx.types.u32)),
+                    self.tcx.types.u32),
             },
         });
         Statement {
@@ -295,13 +295,12 @@ fn make_generator_state_argument_indirect<'a, 'tcx>(
 
 fn replace_result_variable<'tcx>(ret_ty: Ty<'tcx>,
                             mir: &mut Mir<'tcx>) -> Local {
-    let source_info = source_info(mir);
     let new_ret = LocalDecl {
         mutability: Mutability::Mut,
         ty: ret_ty,
         name: None,
-        source_info,
-        visibility_scope: source_info.scope,
+        source_info: source_info(mir),
+        syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
         internal: false,
         is_user_variable: false,
     };
@@ -642,7 +641,7 @@ fn create_generator_drop_shim<'a, 'tcx>(
         ty: tcx.mk_nil(),
         name: None,
         source_info,
-        visibility_scope: source_info.scope,
+        syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
         internal: false,
         is_user_variable: false,
     };
@@ -658,7 +657,7 @@ fn create_generator_drop_shim<'a, 'tcx>(
         }),
         name: None,
         source_info,
-        visibility_scope: source_info.scope,
+        syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
         internal: false,
         is_user_variable: false,
     };
@@ -763,7 +762,7 @@ fn create_generator_resume_function<'a, 'tcx>(
 fn source_info<'a, 'tcx>(mir: &Mir<'tcx>) -> SourceInfo {
     SourceInfo {
         span: mir.span,
-        scope: OUTERMOST_SOURCE_SCOPE,
+        scope: ARGUMENT_VISIBILITY_SCOPE,
     }
 }
 
@@ -862,10 +861,8 @@ impl MirPass for StateTransform {
         // Compute GeneratorState<yield_ty, return_ty>
         let state_did = tcx.lang_items().gen_state().unwrap();
         let state_adt_ref = tcx.adt_def(state_did);
-        let state_substs = tcx.intern_substs(&[
-            yield_ty.into(),
-            mir.return_ty().into(),
-        ]);
+        let state_substs = tcx.mk_substs([yield_ty.into(),
+            mir.return_ty().into()].iter());
         let ret_ty = tcx.mk_adt(state_adt_ref, state_substs);
 
         // We rename RETURN_PLACE which has type mir.return_ty to new_ret_local

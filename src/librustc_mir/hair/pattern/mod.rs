@@ -20,7 +20,7 @@ use interpret::{const_val_field, const_variant_index, self};
 
 use rustc::middle::const_val::ConstVal;
 use rustc::mir::{fmt_const_val, Field, BorrowKind, Mutability};
-use rustc::mir::interpret::{Scalar, GlobalId, ConstValue, Value};
+use rustc::mir::interpret::{PrimVal, GlobalId, ConstValue};
 use rustc::ty::{self, TyCtxt, AdtDef, Ty, Region};
 use rustc::ty::subst::{Substs, Kind};
 use rustc::hir::{self, PatKind, RangeEnd};
@@ -183,7 +183,7 @@ impl<'tcx> fmt::Display for Pattern<'tcx> {
                             if let PatternKind::Wild = *p.pattern.kind {
                                 continue;
                             }
-                            let name = variant.fields[p.field.index()].ident;
+                            let name = variant.fields[p.field.index()].name;
                             write!(f, "{}{}: {}", start_or_continue(), name, p.pattern)?;
                             printed += 1;
                         }
@@ -359,14 +359,8 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                     (PatternKind::Constant { value: lo },
                      PatternKind::Constant { value: hi }) => {
                         use std::cmp::Ordering;
-                        let cmp = compare_const_vals(
-                            self.tcx,
-                            lo,
-                            hi,
-                            self.param_env.and(ty),
-                        );
-                        match (end, cmp) {
-                            (RangeEnd::Excluded, Some(Ordering::Less)) =>
+                        match (end, compare_const_vals(self.tcx, lo, hi, ty).unwrap()) {
+                            (RangeEnd::Excluded, Ordering::Less) =>
                                 PatternKind::Range { lo, hi, end },
                             (RangeEnd::Excluded, _) => {
                                 span_err!(
@@ -377,8 +371,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                                 );
                                 PatternKind::Wild
                             },
-                            (RangeEnd::Included, None) |
-                            (RangeEnd::Included, Some(Ordering::Greater)) => {
+                            (RangeEnd::Included, Ordering::Greater) => {
                                 let mut err = struct_span_err!(
                                     self.tcx.sess,
                                     lo_expr.span,
@@ -399,7 +392,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                                 err.emit();
                                 PatternKind::Wild
                             },
-                            (RangeEnd::Included, Some(_)) => PatternKind::Range { lo, hi, end },
+                            (RangeEnd::Included, _) => PatternKind::Range { lo, hi, end },
                         }
                     }
                     _ => PatternKind::Wild
@@ -1043,30 +1036,14 @@ pub fn compare_const_vals<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     a: &'tcx ty::Const<'tcx>,
     b: &'tcx ty::Const<'tcx>,
-    ty: ty::ParamEnvAnd<'tcx, Ty<'tcx>>,
+    ty: Ty<'tcx>,
 ) -> Option<Ordering> {
     trace!("compare_const_vals: {:?}, {:?}", a, b);
-
-    let from_bool = |v: bool| {
-        if v {
-            Some(Ordering::Equal)
-        } else {
-            None
-        }
-    };
-
-    let fallback = || from_bool(a == b);
-
-    // Use the fallback if any type differs
-    if a.ty != b.ty || a.ty != ty.value {
-        return fallback();
-    }
-
     // FIXME: This should use assert_bits(ty) instead of use_bits
     // but triggers possibly bugs due to mismatching of arrays and slices
-    if let (Some(a), Some(b)) = (a.to_bits(tcx, ty), b.to_bits(tcx, ty)) {
+    if let (Some(a), Some(b)) = (a.to_bits(ty), b.to_bits(ty)) {
         use ::rustc_apfloat::Float;
-        return match ty.value.sty {
+        match ty.sty {
             ty::TyFloat(ast::FloatTy::F32) => {
                 let l = ::rustc_apfloat::ieee::Single::from_bits(a);
                 let r = ::rustc_apfloat::ieee::Single::from_bits(b);
@@ -1078,46 +1055,19 @@ pub fn compare_const_vals<'a, 'tcx>(
                 l.partial_cmp(&r)
             },
             ty::TyInt(_) => {
-                let a = interpret::sign_extend(tcx, a, ty.value).expect("layout error for TyInt");
-                let b = interpret::sign_extend(tcx, b, ty.value).expect("layout error for TyInt");
+                let a = interpret::sign_extend(tcx, a, ty).expect("layout error for TyInt");
+                let b = interpret::sign_extend(tcx, b, ty).expect("layout error for TyInt");
                 Some((a as i128).cmp(&(b as i128)))
             },
             _ => Some(a.cmp(&b)),
         }
-    }
-
-    if let ty::TyRef(_, rty, _) = ty.value.sty {
-        if let ty::TyStr = rty.sty {
-            match (a.to_byval_value(), b.to_byval_value()) {
-                (
-                    Some(Value::ScalarPair(
-                        Scalar::Ptr(ptr_a),
-                        len_a,
-                    )),
-                    Some(Value::ScalarPair(
-                        Scalar::Ptr(ptr_b),
-                        len_b,
-                    ))
-                ) if ptr_a.offset.bytes() == 0 && ptr_b.offset.bytes() == 0 => {
-                    if let Ok(len_a) = len_a.to_bits(tcx.data_layout.pointer_size) {
-                        if let Ok(len_b) = len_b.to_bits(tcx.data_layout.pointer_size) {
-                            if len_a == len_b {
-                                let map = tcx.alloc_map.lock();
-                                let alloc_a = map.unwrap_memory(ptr_a.alloc_id);
-                                let alloc_b = map.unwrap_memory(ptr_b.alloc_id);
-                                if alloc_a.bytes.len() as u128 == len_a {
-                                    return from_bool(alloc_a == alloc_b);
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => (),
-            }
+    } else {
+        if a == b {
+            Some(Ordering::Equal)
+        } else {
+            None
         }
     }
-
-    fallback()
 }
 
 // FIXME: Combine with rustc_mir::hair::cx::const_eval_literal
@@ -1132,24 +1082,25 @@ fn lit_to_const<'a, 'tcx>(lit: &'tcx ast::LitKind,
     let lit = match *lit {
         LitKind::Str(ref s, _) => {
             let s = s.as_str();
-            let id = tcx.allocate_bytes(s.as_bytes());
-            let value = Scalar::Ptr(id.into()).to_value_with_len(s.len() as u64, tcx);
-            ConstValue::from_byval_value(value)
+            let id = tcx.allocate_cached(s.as_bytes());
+            let ptr = MemoryPointer::new(id, 0);
+            ConstValue::ByValPair(
+                PrimVal::Ptr(ptr),
+                PrimVal::from_u128(s.len() as u128),
+            )
         },
         LitKind::ByteStr(ref data) => {
-            let id = tcx.allocate_bytes(data);
-            ConstValue::Scalar(Scalar::Ptr(id.into()))
+            let id = tcx.allocate_cached(data);
+            let ptr = MemoryPointer::new(id, 0);
+            ConstValue::ByVal(PrimVal::Ptr(ptr))
         },
-        LitKind::Byte(n) => ConstValue::Scalar(Scalar::Bits {
-            bits: n as u128,
-            defined: 8,
-        }),
+        LitKind::Byte(n) => ConstValue::ByVal(PrimVal::Bytes(n as u128)),
         LitKind::Int(n, _) => {
             enum Int {
                 Signed(IntTy),
                 Unsigned(UintTy),
             }
-            let ity = match ty.sty {
+            let ty = match ty.sty {
                 ty::TyInt(IntTy::Isize) => Int::Signed(tcx.sess.target.isize_ty),
                 ty::TyInt(other) => Int::Signed(other),
                 ty::TyUint(UintTy::Usize) => Int::Unsigned(tcx.sess.target.usize_ty),
@@ -1157,8 +1108,8 @@ fn lit_to_const<'a, 'tcx>(lit: &'tcx ast::LitKind,
                 _ => bug!(),
             };
             // This converts from LitKind::Int (which is sign extended) to
-            // Scalar::Bytes (which is zero extended)
-            let n = match ity {
+            // PrimVal::Bytes (which is zero extended)
+            let n = match ty {
                 // FIXME(oli-obk): are these casts correct?
                 Int::Signed(IntTy::I8) if neg =>
                     (n as i8).overflowing_neg().0 as u8 as u128,
@@ -1177,11 +1128,7 @@ fn lit_to_const<'a, 'tcx>(lit: &'tcx ast::LitKind,
                 Int::Signed(IntTy::I128)| Int::Unsigned(UintTy::U128) => n,
                 _ => bug!(),
             };
-            let defined = tcx.layout_of(ty::ParamEnv::empty().and(ty)).unwrap().size.bits() as u8;
-            ConstValue::Scalar(Scalar::Bits {
-                bits: n,
-                defined,
-            })
+            ConstValue::ByVal(PrimVal::Bytes(n))
         },
         LitKind::Float(n, fty) => {
             parse_float(n, fty, neg)?
@@ -1193,14 +1140,8 @@ fn lit_to_const<'a, 'tcx>(lit: &'tcx ast::LitKind,
             };
             parse_float(n, fty, neg)?
         }
-        LitKind::Bool(b) => ConstValue::Scalar(Scalar::Bits {
-            bits: b as u128,
-            defined: 8,
-        }),
-        LitKind::Char(c) => ConstValue::Scalar(Scalar::Bits {
-            bits: c as u128,
-            defined: 32,
-        }),
+        LitKind::Bool(b) => ConstValue::ByVal(PrimVal::Bytes(b as u128)),
+        LitKind::Char(c) => ConstValue::ByVal(PrimVal::Bytes(c as u128)),
     };
     Ok(ty::Const::from_const_value(tcx, lit, ty))
 }
@@ -1213,7 +1154,7 @@ pub fn parse_float<'tcx>(
     let num = num.as_str();
     use rustc_apfloat::ieee::{Single, Double};
     use rustc_apfloat::Float;
-    let (bits, defined) = match fty {
+    let bits = match fty {
         ast::FloatTy::F32 => {
             num.parse::<f32>().map_err(|_| ())?;
             let mut f = num.parse::<Single>().unwrap_or_else(|e| {
@@ -1222,7 +1163,7 @@ pub fn parse_float<'tcx>(
             if neg {
                 f = -f;
             }
-            (f.to_bits(), 32)
+            f.to_bits()
         }
         ast::FloatTy::F64 => {
             num.parse::<f64>().map_err(|_| ())?;
@@ -1232,9 +1173,9 @@ pub fn parse_float<'tcx>(
             if neg {
                 f = -f;
             }
-            (f.to_bits(), 64)
+            f.to_bits()
         }
     };
 
-    Ok(ConstValue::Scalar(Scalar::Bits { bits, defined }))
+    Ok(ConstValue::ByVal(PrimVal::Bytes(bits)))
 }

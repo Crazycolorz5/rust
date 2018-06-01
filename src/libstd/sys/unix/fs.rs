@@ -25,8 +25,6 @@ use sys_common::{AsInner, FromInner};
 
 #[cfg(any(target_os = "linux", target_os = "emscripten", target_os = "l4re"))]
 use libc::{stat64, fstat64, lstat64, off64_t, ftruncate64, lseek64, dirent64, readdir64_r, open64};
-#[cfg(any(target_os = "linux", target_os = "emscripten", target_os = "android"))]
-use libc::{fstatat, dirfd};
 #[cfg(target_os = "android")]
 use libc::{stat as stat64, fstat as fstat64, lstat as lstat64, lseek64,
            dirent as dirent64, open as open64};
@@ -50,14 +48,10 @@ pub struct FileAttr {
     stat: stat64,
 }
 
-// all DirEntry's will have a reference to this struct
-struct InnerReadDir {
+pub struct ReadDir {
     dirp: Dir,
-    root: PathBuf,
+    root: Arc<PathBuf>,
 }
-
-#[derive(Clone)]
-pub struct ReadDir(Arc<InnerReadDir>);
 
 struct Dir(*mut libc::DIR);
 
@@ -66,8 +60,8 @@ unsafe impl Sync for Dir {}
 
 pub struct DirEntry {
     entry: dirent64,
-    dir: ReadDir,
-    // We need to store an owned copy of the entry name
+    root: Arc<PathBuf>,
+    // We need to store an owned copy of the directory name
     // on Solaris and Fuchsia because a) it uses a zero-length
     // array to store the name, b) its lifetime between readdir
     // calls is not guaranteed.
@@ -213,7 +207,7 @@ impl fmt::Debug for ReadDir {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // This will only be called from std::fs::ReadDir, which will add a "ReadDir()" frame.
         // Thus the result will be e g 'ReadDir("/home")'
-        fmt::Debug::fmt(&*self.0.root, f)
+        fmt::Debug::fmt(&*self.root, f)
     }
 }
 
@@ -229,7 +223,7 @@ impl Iterator for ReadDir {
                 // is safe to use in threaded applications and it is generally preferred
                 // over the readdir_r(3C) function.
                 super::os::set_errno(0);
-                let entry_ptr = libc::readdir(self.0.dirp.0);
+                let entry_ptr = libc::readdir(self.dirp.0);
                 if entry_ptr.is_null() {
                     // NULL can mean either the end is reached or an error occurred.
                     // So we had to clear errno beforehand to check for an error now.
@@ -246,7 +240,7 @@ impl Iterator for ReadDir {
                     entry: *entry_ptr,
                     name: ::slice::from_raw_parts(name as *const u8,
                                                   namelen as usize).to_owned().into_boxed_slice(),
-                    dir: self.clone()
+                    root: self.root.clone()
                 };
                 if ret.name_bytes() != b"." && ret.name_bytes() != b".." {
                     return Some(Ok(ret))
@@ -260,11 +254,11 @@ impl Iterator for ReadDir {
         unsafe {
             let mut ret = DirEntry {
                 entry: mem::zeroed(),
-                dir: self.clone(),
+                root: self.root.clone()
             };
             let mut entry_ptr = ptr::null_mut();
             loop {
-                if readdir64_r(self.0.dirp.0, &mut ret.entry, &mut entry_ptr) != 0 {
+                if readdir64_r(self.dirp.0, &mut ret.entry, &mut entry_ptr) != 0 {
                     return Some(Err(Error::last_os_error()))
                 }
                 if entry_ptr.is_null() {
@@ -287,27 +281,13 @@ impl Drop for Dir {
 
 impl DirEntry {
     pub fn path(&self) -> PathBuf {
-        self.dir.0.root.join(OsStr::from_bytes(self.name_bytes()))
+        self.root.join(OsStr::from_bytes(self.name_bytes()))
     }
 
     pub fn file_name(&self) -> OsString {
         OsStr::from_bytes(self.name_bytes()).to_os_string()
     }
 
-    #[cfg(any(target_os = "linux", target_os = "emscripten", target_os = "android"))]
-    pub fn metadata(&self) -> io::Result<FileAttr> {
-        let fd = cvt(unsafe {dirfd(self.dir.0.dirp.0)})?;
-        let mut stat: stat64 = unsafe { mem::zeroed() };
-        cvt(unsafe {
-            fstatat(fd,
-                    self.entry.d_name.as_ptr(),
-                    &mut stat as *mut _ as *mut _,
-                    libc::AT_SYMLINK_NOFOLLOW)
-        })?;
-        Ok(FileAttr { stat: stat })
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "emscripten", target_os = "android")))]
     pub fn metadata(&self) -> io::Result<FileAttr> {
         lstat(&self.path())
     }
@@ -684,15 +664,14 @@ impl fmt::Debug for File {
 }
 
 pub fn readdir(p: &Path) -> io::Result<ReadDir> {
-    let root = p.to_path_buf();
+    let root = Arc::new(p.to_path_buf());
     let p = cstr(p)?;
     unsafe {
         let ptr = libc::opendir(p.as_ptr());
         if ptr.is_null() {
             Err(Error::last_os_error())
         } else {
-            let inner = InnerReadDir { dirp: Dir(ptr), root };
-            Ok(ReadDir(Arc::new(inner)))
+            Ok(ReadDir { dirp: Dir(ptr), root: root })
         }
     }
 }
@@ -815,9 +794,8 @@ pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_vec(buf)))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
-    use fs::File;
+    use fs::{File, set_permissions};
     if !from.is_file() {
         return Err(Error::new(ErrorKind::InvalidInput,
                               "the source path is not an existing regular file"))
@@ -828,93 +806,6 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     let perm = reader.metadata()?.permissions();
 
     let ret = io::copy(&mut reader, &mut writer)?;
-    writer.set_permissions(perm)?;
+    set_permissions(to, perm)?;
     Ok(ret)
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
-    use cmp;
-    use fs::File;
-    use sync::atomic::{AtomicBool, Ordering};
-
-    // Kernel prior to 4.5 don't have copy_file_range
-    // We store the availability in a global to avoid unneccessary syscalls
-    static HAS_COPY_FILE_RANGE: AtomicBool = AtomicBool::new(true);
-
-    unsafe fn copy_file_range(
-        fd_in: libc::c_int,
-        off_in: *mut libc::loff_t,
-        fd_out: libc::c_int,
-        off_out: *mut libc::loff_t,
-        len: libc::size_t,
-        flags: libc::c_uint,
-    ) -> libc::c_long {
-        libc::syscall(
-            libc::SYS_copy_file_range,
-            fd_in,
-            off_in,
-            fd_out,
-            off_out,
-            len,
-            flags,
-        )
-    }
-
-    if !from.is_file() {
-        return Err(Error::new(ErrorKind::InvalidInput,
-                              "the source path is not an existing regular file"))
-    }
-
-    let mut reader = File::open(from)?;
-    let mut writer = File::create(to)?;
-    let (perm, len) = {
-        let metadata = reader.metadata()?;
-        (metadata.permissions(), metadata.size())
-    };
-
-    let has_copy_file_range = HAS_COPY_FILE_RANGE.load(Ordering::Relaxed);
-    let mut written = 0u64;
-    while written < len {
-        let copy_result = if has_copy_file_range {
-            let bytes_to_copy = cmp::min(len - written, usize::max_value() as u64) as usize;
-            let copy_result = unsafe {
-                // We actually don't have to adjust the offsets,
-                // because copy_file_range adjusts the file offset automatically
-                cvt(copy_file_range(reader.as_raw_fd(),
-                                    ptr::null_mut(),
-                                    writer.as_raw_fd(),
-                                    ptr::null_mut(),
-                                    bytes_to_copy,
-                                    0)
-                    )
-            };
-            if let Err(ref copy_err) = copy_result {
-                if let Some(libc::ENOSYS) = copy_err.raw_os_error() {
-                    HAS_COPY_FILE_RANGE.store(false, Ordering::Relaxed);
-                }
-            }
-            copy_result
-        } else {
-            Err(io::Error::from_raw_os_error(libc::ENOSYS))
-        };
-        match copy_result {
-            Ok(ret) => written += ret as u64,
-            Err(err) => {
-                match err.raw_os_error() {
-                    Some(os_err) if os_err == libc::ENOSYS || os_err == libc::EXDEV => {
-                        // Either kernel is too old or the files are not mounted on the same fs.
-                        // Try again with fallback method
-                        assert_eq!(written, 0);
-                        let ret = io::copy(&mut reader, &mut writer)?;
-                        writer.set_permissions(perm)?;
-                        return Ok(ret)
-                    },
-                    _ => return Err(err),
-                }
-            }
-        }
-    }
-    writer.set_permissions(perm)?;
-    Ok(written)
 }

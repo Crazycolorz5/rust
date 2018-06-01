@@ -77,9 +77,8 @@ pub struct Lint {
     /// e.g. "imports that are never used"
     pub desc: &'static str,
 
-    /// Starting at the given edition, default to the given lint level. If this is `None`, then use
-    /// `default_level`.
-    pub edition_lint_opts: Option<(Edition, Level)>,
+    /// Deny lint after this edition
+    pub edition_deny: Option<Edition>,
 }
 
 impl Lint {
@@ -89,32 +88,32 @@ impl Lint {
     }
 
     pub fn default_level(&self, session: &Session) -> Level {
-        self.edition_lint_opts
-            .filter(|(e, _)| *e <= session.edition())
-            .map(|(_, l)| l)
-            .unwrap_or(self.default_level)
+        if let Some(edition_deny) = self.edition_deny {
+            if session.edition() >= edition_deny {
+                return Level::Deny
+            }
+        }
+        self.default_level
     }
 }
 
 /// Declare a static item of type `&'static Lint`.
 #[macro_export]
 macro_rules! declare_lint {
+    ($vis: vis $NAME: ident, $Level: ident, $desc: expr, $edition: expr) => (
+        $vis static $NAME: &$crate::lint::Lint = &$crate::lint::Lint {
+            name: stringify!($NAME),
+            default_level: $crate::lint::$Level,
+            desc: $desc,
+            edition_deny: Some($edition)
+        };
+    );
     ($vis: vis $NAME: ident, $Level: ident, $desc: expr) => (
         $vis static $NAME: &$crate::lint::Lint = &$crate::lint::Lint {
             name: stringify!($NAME),
             default_level: $crate::lint::$Level,
             desc: $desc,
-            edition_lint_opts: None,
-        };
-    );
-    ($vis: vis $NAME: ident, $Level: ident, $desc: expr,
-     $lint_edition: expr => $edition_level: ident $(,)?
-    ) => (
-        $vis static $NAME: &$crate::lint::Lint = &$crate::lint::Lint {
-            name: stringify!($NAME),
-            default_level: $crate::lint::$Level,
-            desc: $desc,
-            edition_lint_opts: Some(($lint_edition, $crate::lint::Level::$edition_level)),
+            edition_deny: None,
         };
     );
 }
@@ -122,7 +121,8 @@ macro_rules! declare_lint {
 /// Declare a static `LintArray` and return it as an expression.
 #[macro_export]
 macro_rules! lint_array {
-    ($( $lint:expr ),* $(,)?) => {{
+    ($( $lint:expr ),*,) => { lint_array!( $( $lint ),* ) };
+    ($( $lint:expr ),*) => {{
          static ARRAY: LintArray = &[ $( &$lint ),* ];
          ARRAY
     }}
@@ -505,7 +505,7 @@ pub fn struct_lint_level<'a>(sess: &'a Session,
             "this was previously accepted by the compiler but is being phased out; \
              it will become a hard error";
 
-        let explanation = if lint_id == LintId::of(::lint::builtin::UNSTABLE_NAME_COLLISIONS) {
+        let explanation = if lint_id == LintId::of(::lint::builtin::UNSTABLE_NAME_COLLISION) {
             "once this method is added to the standard library, \
              the ambiguity may cause an error or change in behavior!"
                 .to_owned()

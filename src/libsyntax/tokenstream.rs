@@ -31,7 +31,6 @@ use print::pprust;
 use serialize::{Decoder, Decodable, Encoder, Encodable};
 use util::RcSlice;
 
-use std::borrow::Cow;
 use std::{fmt, iter, mem};
 use std::hash::{self, Hash};
 
@@ -107,7 +106,7 @@ impl TokenTree {
                  -> macro_parser::NamedParseResult {
         // `None` is because we're not interpolating
         let directory = Directory {
-            path: Cow::from(cx.current_expansion.module.directory.as_path()),
+            path: cx.current_expansion.module.directory.clone(),
             ownership: cx.current_expansion.directory_ownership,
         };
         macro_parser::parse(cx.parse_sess(), tts, mtch, Some(directory), true)

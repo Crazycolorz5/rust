@@ -18,7 +18,9 @@ impl<'a> StringReader<'a> {
     pub fn parse_all_token_trees(&mut self) -> PResult<'a, TokenStream> {
         let mut tts = Vec::new();
         while self.token != token::Eof {
-            tts.push(self.parse_token_tree()?);
+            let tree = self.parse_token_tree()?;
+            let is_joint = tree.span().hi() == self.span.lo() && token::is_op(&self.token);
+            tts.push(if is_joint { tree.joint() } else { tree.into() });
         }
         Ok(TokenStream::concat(tts))
     }
@@ -30,17 +32,19 @@ impl<'a> StringReader<'a> {
             if let token::CloseDelim(..) = self.token {
                 return TokenStream::concat(tts);
             }
-            match self.parse_token_tree() {
-                Ok(tree) => tts.push(tree),
+            let tree = match self.parse_token_tree() {
+                Ok(tree) => tree,
                 Err(mut e) => {
                     e.emit();
                     return TokenStream::concat(tts);
                 }
-            }
+            };
+            let is_joint = tree.span().hi() == self.span.lo() && token::is_op(&self.token);
+            tts.push(if is_joint { tree.joint() } else { tree.into() });
         }
     }
 
-    fn parse_token_tree(&mut self) -> PResult<'a, TokenStream> {
+    fn parse_token_tree(&mut self) -> PResult<'a, TokenTree> {
         match self.token {
             token::Eof => {
                 let msg = "this file contains an un-closed delimiter";
@@ -111,7 +115,7 @@ impl<'a> StringReader<'a> {
                 Ok(TokenTree::Delimited(span, Delimited {
                     delim,
                     tts: tts.into(),
-                }).into())
+                }))
             },
             token::CloseDelim(_) => {
                 // An unexpected closing delimiter (i.e., there is no
@@ -123,13 +127,8 @@ impl<'a> StringReader<'a> {
             },
             _ => {
                 let tt = TokenTree::Token(self.span, self.token.clone());
-                // Note that testing for joint-ness here is done via the raw
-                // source span as the joint-ness is a property of the raw source
-                // rather than wanting to take `override_span` into account.
-                let raw = self.span_src_raw;
                 self.real_token();
-                let is_joint = raw.hi() == self.span_src_raw.lo() && token::is_op(&self.token);
-                Ok(if is_joint { tt.joint() } else { tt.into() })
+                Ok(tt)
             }
         }
     }

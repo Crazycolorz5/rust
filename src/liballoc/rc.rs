@@ -644,9 +644,15 @@ impl Rc<Any> {
     /// ```
     pub fn downcast<T: Any>(self) -> Result<Rc<T>, Rc<Any>> {
         if (*self).is::<T>() {
-            let ptr = self.ptr.cast::<RcBox<T>>();
-            forget(self);
-            Ok(Rc { ptr, phantom: PhantomData })
+            // avoid the pointer arithmetic in from_raw
+            unsafe {
+                let raw: *const RcBox<Any> = self.ptr.as_ptr();
+                forget(self);
+                Ok(Rc {
+                    ptr: NonNull::new_unchecked(raw as *const RcBox<T> as *mut _),
+                    phantom: PhantomData,
+                })
+            }
         } else {
             Err(self)
         }
@@ -662,7 +668,7 @@ impl<T: ?Sized> Rc<T> {
         let layout = Layout::for_value(&*fake_ptr);
 
         let mem = Global.alloc(layout)
-            .unwrap_or_else(|_| oom(layout));
+            .unwrap_or_else(|_| oom());
 
         // Initialize the real RcBox
         let inner = set_data_ptr(ptr as *mut T, mem.as_ptr() as *mut u8) as *mut RcBox<T>;

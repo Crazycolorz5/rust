@@ -24,7 +24,7 @@ use rustc_serialize as serialize;
 use hir::def::CtorKind;
 use hir::def_id::DefId;
 use mir::visit::MirVisitable;
-use mir::interpret::{Value, Scalar, EvalErrorKind};
+use mir::interpret::{Value, PrimVal, EvalErrorKind};
 use ty::subst::{Subst, Substs};
 use ty::{self, AdtDef, CanonicalTy, ClosureSubsts, GeneratorSubsts, Region, Ty, TyCtxt};
 use ty::fold::{TypeFoldable, TypeFolder, TypeVisitor};
@@ -78,13 +78,13 @@ pub struct Mir<'tcx> {
     /// that indexes into this vector.
     basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
 
-    /// List of source scopes; these are referenced by statements
-    /// and used for debuginfo. Indexed by a `SourceScope`.
-    pub source_scopes: IndexVec<SourceScope, SourceScopeData>,
+    /// List of visibility (lexical) scopes; these are referenced by statements
+    /// and used (eventually) for debuginfo. Indexed by a `VisibilityScope`.
+    pub visibility_scopes: IndexVec<VisibilityScope, VisibilityScopeData>,
 
-    /// Crate-local information for each source scope, that can't (and
+    /// Crate-local information for each visibility scope, that can't (and
     /// needn't) be tracked across crates.
-    pub source_scope_local_data: ClearCrossCrate<IndexVec<SourceScope, SourceScopeLocalData>>,
+    pub visibility_scope_info: ClearCrossCrate<IndexVec<VisibilityScope, VisibilityScopeInfo>>,
 
     /// Rvalues promoted from this function, such as borrows of constants.
     /// Each of them is the Mir of a constant with the fn's type parameters
@@ -137,9 +137,9 @@ pub const START_BLOCK: BasicBlock = BasicBlock(0);
 
 impl<'tcx> Mir<'tcx> {
     pub fn new(basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
-               source_scopes: IndexVec<SourceScope, SourceScopeData>,
-               source_scope_local_data: ClearCrossCrate<IndexVec<SourceScope,
-                                                                 SourceScopeLocalData>>,
+               visibility_scopes: IndexVec<VisibilityScope, VisibilityScopeData>,
+               visibility_scope_info: ClearCrossCrate<IndexVec<VisibilityScope,
+                                                               VisibilityScopeInfo>>,
                promoted: IndexVec<Promoted, Mir<'tcx>>,
                yield_ty: Option<Ty<'tcx>>,
                local_decls: IndexVec<Local, LocalDecl<'tcx>>,
@@ -153,8 +153,8 @@ impl<'tcx> Mir<'tcx> {
 
         Mir {
             basic_blocks,
-            source_scopes,
-            source_scope_local_data,
+            visibility_scopes,
+            visibility_scope_info,
             promoted,
             yield_ty,
             generator_drop: None,
@@ -308,6 +308,14 @@ impl<'tcx> Mir<'tcx> {
     }
 }
 
+#[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
+pub struct VisibilityScopeInfo {
+    /// A NodeId with lint levels equivalent to this scope's lint levels.
+    pub lint_root: ast::NodeId,
+    /// The unsafe block that contains this node.
+    pub safety: Safety,
+}
+
 #[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable)]
 pub enum Safety {
     Safe,
@@ -321,8 +329,8 @@ pub enum Safety {
 
 impl_stable_hash_for!(struct Mir<'tcx> {
     basic_blocks,
-    source_scopes,
-    source_scope_local_data,
+    visibility_scopes,
+    visibility_scope_info,
     promoted,
     yield_ty,
     generator_drop,
@@ -368,9 +376,8 @@ pub struct SourceInfo {
     /// Source span for the AST pertaining to this MIR entity.
     pub span: Span,
 
-    /// The source scope, keeping track of which bindings can be
-    /// seen by debuginfo, active lint levels, `unsafe {...}`, etc.
-    pub scope: SourceScope
+    /// The lexical visibility scope, i.e. which bindings can be seen.
+    pub scope: VisibilityScope
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -505,13 +512,16 @@ pub struct LocalDecl<'tcx> {
     /// to generate better debuginfo.
     pub name: Option<Name>,
 
-    /// The *syntactic* (i.e. not visibility) source scope the local is defined
+    /// Source info of the local.
+    pub source_info: SourceInfo,
+
+    /// The *syntactic* visibility scope the local is defined
     /// in. If the local was defined in a let-statement, this
     /// is *within* the let-statement, rather than outside
     /// of it.
     ///
-    /// This is needed because the visibility source scope of locals within
-    /// a let-statement is weird.
+    /// This is needed because visibility scope of locals within a let-statement
+    /// is weird.
     ///
     /// The reason is that we want the local to be *within* the let-statement
     /// for lint purposes, but we want the local to be *after* the let-statement
@@ -556,9 +566,9 @@ pub struct LocalDecl<'tcx> {
     /// `drop(x)`, we want it to refer to `x: u32`.
     ///
     /// To allow both uses to work, we need to have more than a single scope
-    /// for a local. We have the `source_info.scope` represent the
+    /// for a local. We have the `syntactic_scope` represent the
     /// "syntactic" lint scope (with a variable being under its let
-    /// block) while the `visibility_scope` represents the "local variable"
+    /// block) while the source-info scope represents the "local variable"
     /// scope (where the "rest" of a block is under all prior let-statements).
     ///
     /// The end result looks like this:
@@ -570,25 +580,21 @@ pub struct LocalDecl<'tcx> {
     ///  │ │{ #[allow(unused_mut] } // this is actually split into 2 scopes
     ///  │ │                        // in practice because I'm lazy.
     ///  │ │
-    ///  │ │← x.source_info.scope
+    ///  │ │← x.syntactic_scope
     ///  │ │← `x.parse().unwrap()`
     ///  │ │
-    ///  │ │ │← y.source_info.scope
+    ///  │ │ │← y.syntactic_scope
     ///  │ │
     ///  │ │ │{ let y: u32 }
     ///  │ │ │
-    ///  │ │ │← y.visibility_scope
+    ///  │ │ │← y.source_info.scope
     ///  │ │ │← `y + 2`
     ///  │
     ///  │ │{ let x: u32 }
-    ///  │ │← x.visibility_scope
+    ///  │ │← x.source_info.scope
     ///  │ │← `drop(x)` // this accesses `x: u32`
     /// ```
-    pub source_info: SourceInfo,
-
-    /// Source scope within which the local is visible (for debuginfo)
-    /// (see `source_info` for more details).
-    pub visibility_scope: SourceScope,
+    pub syntactic_scope: VisibilityScope,
 }
 
 impl<'tcx> LocalDecl<'tcx> {
@@ -601,9 +607,9 @@ impl<'tcx> LocalDecl<'tcx> {
             name: None,
             source_info: SourceInfo {
                 span,
-                scope: OUTERMOST_SOURCE_SCOPE
+                scope: ARGUMENT_VISIBILITY_SCOPE
             },
-            visibility_scope: OUTERMOST_SOURCE_SCOPE,
+            syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
             internal: false,
             is_user_variable: false
         }
@@ -618,9 +624,9 @@ impl<'tcx> LocalDecl<'tcx> {
             name: None,
             source_info: SourceInfo {
                 span,
-                scope: OUTERMOST_SOURCE_SCOPE
+                scope: ARGUMENT_VISIBILITY_SCOPE
             },
-            visibility_scope: OUTERMOST_SOURCE_SCOPE,
+            syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
             internal: true,
             is_user_variable: false
         }
@@ -636,9 +642,9 @@ impl<'tcx> LocalDecl<'tcx> {
             ty: return_ty,
             source_info: SourceInfo {
                 span,
-                scope: OUTERMOST_SOURCE_SCOPE
+                scope: ARGUMENT_VISIBILITY_SCOPE
             },
-            visibility_scope: OUTERMOST_SOURCE_SCOPE,
+            syntactic_scope: ARGUMENT_VISIBILITY_SCOPE,
             internal: false,
             name: None,     // FIXME maybe we do want some name here?
             is_user_variable: false
@@ -942,7 +948,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             Drop { target: ref mut t, unwind: Some(ref mut u), .. } |
             Assert { target: ref mut t, cleanup: Some(ref mut u), .. } |
             FalseUnwind { real_target: ref mut t, unwind: Some(ref mut u) } => {
-                Some(t).into_iter().chain(slice::from_mut(u))
+                Some(t).into_iter().chain(slice::from_ref_mut(u))
             }
             SwitchInt { ref mut targets, .. } => {
                 None.into_iter().chain(&mut targets[..])
@@ -1041,7 +1047,7 @@ impl<'tcx> BasicBlockData<'tcx> {
         self.statements.resize(gap.end, Statement {
             source_info: SourceInfo {
                 span: DUMMY_SP,
-                scope: OUTERMOST_SOURCE_SCOPE
+                scope: ARGUMENT_VISIBILITY_SCOPE
             },
             kind: StatementKind::Nop
         });
@@ -1143,16 +1149,11 @@ impl<'tcx> TerminatorKind<'tcx> {
             Return | Resume | Abort | Unreachable | GeneratorDrop => vec![],
             Goto { .. } => vec!["".into()],
             SwitchInt { ref values, switch_ty, .. } => {
-                let size = ty::tls::with(|tcx| {
-                    let param_env = ty::ParamEnv::empty();
-                    let switch_ty = tcx.lift_to_global(&switch_ty).unwrap();
-                    tcx.layout_of(param_env.and(switch_ty)).unwrap().size
-                });
                 values.iter()
                       .map(|&u| {
                           let mut s = String::new();
                           print_miri_value(
-                              Value::Scalar(Scalar::Bits { bits: u, defined: size.bits() as u8 }),
+                              Value::ByVal(PrimVal::Bytes(u)),
                               switch_ty,
                               &mut s,
                           ).unwrap();
@@ -1218,10 +1219,6 @@ impl<'tcx> Statement<'tcx> {
 pub enum StatementKind<'tcx> {
     /// Write the RHS Rvalue to the LHS Place.
     Assign(Place<'tcx>, Rvalue<'tcx>),
-
-    /// This represents all the reading that a pattern match may do
-    /// (e.g. inspecting constants and discriminant values).
-    ReadForMatch(Place<'tcx>),
 
     /// Write the discriminant for a variant to the enum Place.
     SetDiscriminant { place: Place<'tcx>, variant_index: usize },
@@ -1325,7 +1322,6 @@ impl<'tcx> Debug for Statement<'tcx> {
         use self::StatementKind::*;
         match self.kind {
             Assign(ref place, ref rv) => write!(fmt, "{:?} = {:?}", place, rv),
-            ReadForMatch(ref place) => write!(fmt, "ReadForMatch({:?})", place),
             // (reuse lifetime rendering policy from ppaux.)
             EndRegion(ref ce) => write!(fmt, "EndRegion({})", ty::ReScope(*ce)),
             Validate(ref op, ref places) => write!(fmt, "Validate({:?}, {:?})", op, places),
@@ -1495,24 +1491,16 @@ impl<'tcx> Debug for Place<'tcx> {
 ///////////////////////////////////////////////////////////////////////////
 // Scopes
 
-newtype_index!(SourceScope
+newtype_index!(VisibilityScope
     {
         DEBUG_FORMAT = "scope[{}]",
-        const OUTERMOST_SOURCE_SCOPE = 0,
+        const ARGUMENT_VISIBILITY_SCOPE = 0,
     });
 
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
-pub struct SourceScopeData {
+pub struct VisibilityScopeData {
     pub span: Span,
-    pub parent_scope: Option<SourceScope>,
-}
-
-#[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
-pub struct SourceScopeLocalData {
-    /// A NodeId with lint levels equivalent to this scope's lint levels.
-    pub lint_root: ast::NodeId,
-    /// The unsafe block that contains this node.
-    pub safety: Safety,
+    pub parent_scope: Option<VisibilityScope>,
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1781,7 +1769,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             CtorKind::Fictive => {
                                 let mut struct_fmt = fmt.debug_struct("");
                                 for (field, place) in variant_def.fields.iter().zip(places) {
-                                    struct_fmt.field(&field.ident.as_str(), place);
+                                    struct_fmt.field(&field.name.as_str(), place);
                                 }
                                 struct_fmt.finish()
                             }
@@ -1905,37 +1893,32 @@ pub fn fmt_const_val<W: Write>(fmt: &mut W, const_val: &ty::Const) -> fmt::Resul
 pub fn print_miri_value<W: Write>(value: Value, ty: Ty, f: &mut W) -> fmt::Result {
     use ty::TypeVariants::*;
     match (value, &ty.sty) {
-        (Value::Scalar(Scalar::Bits { bits: 0, .. }), &TyBool) => write!(f, "false"),
-        (Value::Scalar(Scalar::Bits { bits: 1, .. }), &TyBool) => write!(f, "true"),
-        (Value::Scalar(Scalar::Bits { bits, .. }), &TyFloat(ast::FloatTy::F32)) =>
+        (Value::ByVal(PrimVal::Bytes(0)), &TyBool) => write!(f, "false"),
+        (Value::ByVal(PrimVal::Bytes(1)), &TyBool) => write!(f, "true"),
+        (Value::ByVal(PrimVal::Bytes(bits)), &TyFloat(ast::FloatTy::F32)) =>
             write!(f, "{}f32", Single::from_bits(bits)),
-        (Value::Scalar(Scalar::Bits { bits, .. }), &TyFloat(ast::FloatTy::F64)) =>
+        (Value::ByVal(PrimVal::Bytes(bits)), &TyFloat(ast::FloatTy::F64)) =>
             write!(f, "{}f64", Double::from_bits(bits)),
-        (Value::Scalar(Scalar::Bits { bits, .. }), &TyUint(ui)) => write!(f, "{:?}{}", bits, ui),
-        (Value::Scalar(Scalar::Bits { bits, .. }), &TyInt(i)) => {
-            let bit_width = ty::tls::with(|tcx| {
-                 let ty = tcx.lift_to_global(&ty).unwrap();
-                 tcx.layout_of(ty::ParamEnv::empty().and(ty)).unwrap().size.bits()
-            });
-            let shift = 128 - bit_width;
-            write!(f, "{:?}{}", ((bits as i128) << shift) >> shift, i)
-        },
-        (Value::Scalar(Scalar::Bits { bits, .. }), &TyChar) =>
-            write!(f, "{:?}", ::std::char::from_u32(bits as u32).unwrap()),
-        (_, &TyFnDef(did, _)) =>
+        (Value::ByVal(PrimVal::Bytes(n)), &TyUint(ui)) => write!(f, "{:?}{}", n, ui),
+        (Value::ByVal(PrimVal::Bytes(n)), &TyInt(i)) => write!(f, "{:?}{}", n as i128, i),
+        (Value::ByVal(PrimVal::Bytes(n)), &TyChar) =>
+            write!(f, "{:?}", ::std::char::from_u32(n as u32).unwrap()),
+        (Value::ByVal(PrimVal::Undef), &TyFnDef(did, _)) =>
             write!(f, "{}", item_path_str(did)),
-        (Value::ScalarPair(Scalar::Ptr(ptr), Scalar::Bits { bits: len, .. }),
+        (Value::ByValPair(PrimVal::Ptr(ptr), PrimVal::Bytes(len)),
          &TyRef(_, &ty::TyS { sty: TyStr, .. }, _)) => {
             ty::tls::with(|tcx| {
-                match tcx.alloc_map.lock().get(ptr.alloc_id) {
-                    Some(interpret::AllocType::Memory(alloc)) => {
-                        assert_eq!(len as usize as u128, len);
-                        let slice = &alloc.bytes[(ptr.offset.bytes() as usize)..][..(len as usize)];
-                        let s = ::std::str::from_utf8(slice)
-                            .expect("non utf8 str from miri");
-                        write!(f, "{:?}", s)
-                    }
-                    _ => write!(f, "pointer to erroneous constant {:?}, {:?}", ptr, len),
+                let alloc = tcx
+                    .interpret_interner
+                    .get_alloc(ptr.alloc_id);
+                if let Some(alloc) = alloc {
+                    assert_eq!(len as usize as u128, len);
+                    let slice = &alloc.bytes[(ptr.offset as usize)..][..(len as usize)];
+                    let s = ::std::str::from_utf8(slice)
+                        .expect("non utf8 str from miri");
+                    write!(f, "{:?}", s)
+                } else {
+                    write!(f, "pointer to erroneous constant {:?}, {:?}", ptr, len)
                 }
             })
         },
@@ -2155,16 +2138,16 @@ CloneTypeFoldableAndLiftImpls! {
     SourceInfo,
     UpvarDecl,
     ValidationOp,
-    SourceScope,
-    SourceScopeData,
-    SourceScopeLocalData,
+    VisibilityScopeData,
+    VisibilityScope,
+    VisibilityScopeInfo,
 }
 
 BraceStructTypeFoldableImpl! {
     impl<'tcx> TypeFoldable<'tcx> for Mir<'tcx> {
         basic_blocks,
-        source_scopes,
-        source_scope_local_data,
+        visibility_scopes,
+        visibility_scope_info,
         promoted,
         yield_ty,
         generator_drop,
@@ -2192,7 +2175,7 @@ BraceStructTypeFoldableImpl! {
         ty,
         name,
         source_info,
-        visibility_scope,
+        syntactic_scope,
     }
 }
 
@@ -2219,7 +2202,6 @@ BraceStructTypeFoldableImpl! {
 EnumTypeFoldableImpl! {
     impl<'tcx> TypeFoldable<'tcx> for StatementKind<'tcx> {
         (StatementKind::Assign)(a, b),
-        (StatementKind::ReadForMatch)(place),
         (StatementKind::SetDiscriminant) { place, variant_index },
         (StatementKind::StorageLive)(a),
         (StatementKind::StorageDead)(a),

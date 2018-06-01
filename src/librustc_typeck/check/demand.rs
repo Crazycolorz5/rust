@@ -19,7 +19,7 @@ use syntax::util::parser::PREC_POSTFIX;
 use syntax_pos::Span;
 use rustc::hir;
 use rustc::hir::def::Def;
-use rustc::hir::map::{NodeItem, NodeExpr};
+use rustc::hir::map::NodeItem;
 use rustc::hir::{Item, ItemConst, print};
 use rustc::ty::{self, Ty, AssociatedItem};
 use rustc::ty::adjustment::AllowTwoPhase;
@@ -140,8 +140,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             }
         }
 
-        if let Some((sp, msg, suggestion)) = self.check_ref(expr, checked_ty, expected) {
-            err.span_suggestion(sp, msg, suggestion);
+        if let Some((msg, suggestion)) = self.check_ref(expr, checked_ty, expected) {
+            err.span_suggestion(expr.span, msg, suggestion);
         } else if !self.check_for_cast(&mut err, expr, expr_ty, expected) {
             let methods = self.get_conversion_methods(expr.span, expected, checked_ty);
             if let Ok(expr_text) = self.tcx.sess.codemap().span_to_snippet(expr.span) {
@@ -194,57 +194,6 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
-    /// Identify some cases where `as_ref()` would be appropriate and suggest it.
-    ///
-    /// Given the following code:
-    /// ```
-    /// struct Foo;
-    /// fn takes_ref(_: &Foo) {}
-    /// let ref opt = Some(Foo);
-    ///
-    /// opt.map(|arg| takes_ref(arg));
-    /// ```
-    /// Suggest using `opt.as_ref().map(|arg| takes_ref(arg));` instead.
-    ///
-    /// It only checks for `Option` and `Result` and won't work with
-    /// ```
-    /// opt.map(|arg| { takes_ref(arg) });
-    /// ```
-    fn can_use_as_ref(&self, expr: &hir::Expr) -> Option<(Span, &'static str, String)> {
-        if let hir::ExprPath(hir::QPath::Resolved(_, ref path)) = expr.node {
-            if let hir::def::Def::Local(id) = path.def {
-                let parent = self.tcx.hir.get_parent_node(id);
-                if let Some(NodeExpr(hir::Expr {
-                    id,
-                    node: hir::ExprClosure(_, decl, ..),
-                    ..
-                })) = self.tcx.hir.find(parent) {
-                    let parent = self.tcx.hir.get_parent_node(*id);
-                    if let (Some(NodeExpr(hir::Expr {
-                        node: hir::ExprMethodCall(path, span, expr),
-                        ..
-                    })), 1) = (self.tcx.hir.find(parent), decl.inputs.len()) {
-                        let self_ty = self.tables.borrow().node_id_to_type(expr[0].hir_id);
-                        let self_ty = format!("{:?}", self_ty);
-                        let name = path.name.as_str();
-                        let is_as_ref_able = (
-                            self_ty.starts_with("&std::option::Option") ||
-                            self_ty.starts_with("&std::result::Result") ||
-                            self_ty.starts_with("std::option::Option") ||
-                            self_ty.starts_with("std::result::Result")
-                        ) && (name == "map" || name == "and_then");
-                        if is_as_ref_able {
-                            return Some((span.shrink_to_lo(),
-                                         "consider using `as_ref` instead",
-                                         "as_ref().".into()));
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// This function is used to determine potential "simple" improvements or users' errors and
     /// provide them useful help. For example:
     ///
@@ -265,8 +214,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                  expr: &hir::Expr,
                  checked_ty: Ty<'tcx>,
                  expected: Ty<'tcx>)
-                 -> Option<(Span, &'static str, String)> {
-        let sp = expr.span;
+                 -> Option<(&'static str, String)> {
         match (&expected.sty, &checked_ty.sty) {
             (&ty::TyRef(_, exp, _), &ty::TyRef(_, check, _)) => match (&exp.sty, &check.sty) {
                 (&ty::TyStr, &ty::TyArray(arr, _)) |
@@ -274,24 +222,24 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     if let hir::ExprLit(_) = expr.node {
                         let sp = self.sess().codemap().call_span_if_macro(expr.span);
                         if let Ok(src) = self.tcx.sess.codemap().span_to_snippet(sp) {
-                            return Some((sp,
-                                         "consider removing the leading `b`",
+                            return Some(("consider removing the leading `b`",
                                          src[1..].to_string()));
                         }
                     }
+                    None
                 },
                 (&ty::TyArray(arr, _), &ty::TyStr) |
                 (&ty::TySlice(arr), &ty::TyStr) if arr == self.tcx.types.u8 => {
                     if let hir::ExprLit(_) = expr.node {
                         let sp = self.sess().codemap().call_span_if_macro(expr.span);
                         if let Ok(src) = self.tcx.sess.codemap().span_to_snippet(sp) {
-                            return Some((sp,
-                                         "consider adding a leading `b`",
+                            return Some(("consider adding a leading `b`",
                                          format!("b{}", src)));
                         }
                     }
+                    None
                 }
-                _ => {}
+                _ => None,
             },
             (&ty::TyRef(_, _, mutability), _) => {
                 // Check if it can work when put into a ref. For example:
@@ -318,20 +266,17 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             hir::ExprCast(_, _) | hir::ExprBinary(_, _, _) => format!("({})", src),
                             _ => src,
                         };
-                        if let Some(sugg) = self.can_use_as_ref(expr) {
-                            return Some(sugg);
-                        }
                         return Some(match mutability {
                             hir::Mutability::MutMutable => {
-                                (sp, "consider mutably borrowing here", format!("&mut {}",
-                                                                                sugg_expr))
+                                ("consider mutably borrowing here", format!("&mut {}", sugg_expr))
                             }
                             hir::Mutability::MutImmutable => {
-                                (sp, "consider borrowing here", format!("&{}", sugg_expr))
+                                ("consider borrowing here", format!("&{}", sugg_expr))
                             }
                         });
                     }
                 }
+                None
             }
             (_, &ty::TyRef(_, checked, _)) => {
                 // We have `&T`, check if what was expected was `T`. If so,
@@ -347,7 +292,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         // Maybe remove `&`?
                         hir::ExprAddrOf(_, ref expr) => {
                             if let Ok(code) = self.tcx.sess.codemap().span_to_snippet(expr.span) {
-                                return Some((sp, "consider removing the borrow", code));
+                                return Some(("consider removing the borrow", code));
                             }
                         }
 
@@ -358,18 +303,17 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                                                 expr.span) {
                                 let sp = self.sess().codemap().call_span_if_macro(expr.span);
                                 if let Ok(code) = self.tcx.sess.codemap().span_to_snippet(sp) {
-                                    return Some((sp,
-                                                 "consider dereferencing the borrow",
+                                    return Some(("consider dereferencing the borrow",
                                                  format!("*{}", code)));
                                 }
                             }
                         }
                     }
                 }
+                None
             }
-            _ => {}
+            _ => None,
         }
-        None
     }
 
     fn check_for_cast(&self,

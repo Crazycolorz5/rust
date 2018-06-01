@@ -71,7 +71,7 @@ macro_rules! quote_tree {
 }
 
 macro_rules! quote {
-    () => { TokenStream::new() };
+    () => { TokenStream::empty() };
     ($($t:tt)*) => {
         [$(quote_tree!($t),)*].iter()
             .cloned()
@@ -104,7 +104,7 @@ impl<T: Quote> Quote for Option<T> {
 impl Quote for TokenStream {
     fn quote(self) -> TokenStream {
         if self.is_empty() {
-            return quote!(::TokenStream::new());
+            return quote!(::TokenStream::empty());
         }
         let mut after_dollar = false;
         let tokens = self.into_iter().filter_map(|tree| {

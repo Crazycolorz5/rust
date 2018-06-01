@@ -32,8 +32,8 @@ struct Ccx {
 
 fn alloc<'a>(_bcx : &'a arena) -> &'a Bcx<'a> {
     unsafe {
-        let layout = Layout::new::<Bcx>();
-        let ptr = Global.alloc(layout).unwrap_or_else(|_| oom(layout));
+        let ptr = Global.alloc(Layout::new::<Bcx>())
+            .unwrap_or_else(|_| oom());
         &*(ptr.as_ptr() as *const _)
     }
 }

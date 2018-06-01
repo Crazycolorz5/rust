@@ -26,8 +26,8 @@ impl_stable_hash_for!(struct mir::LocalDecl<'tcx> {
     ty,
     name,
     source_info,
-    visibility_scope,
     internal,
+    syntactic_scope,
     is_user_variable
 });
 impl_stable_hash_for!(struct mir::UpvarDecl { debug_name, by_ref, mutability });
@@ -127,7 +127,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for mir::Field {
 }
 
 impl<'a> HashStable<StableHashingContext<'a>>
-for mir::SourceScope {
+for mir::VisibilityScope {
     #[inline]
     fn hash_stable<W: StableHasherResult>(&self,
                                           hcx: &mut StableHashingContext<'a>,
@@ -240,9 +240,6 @@ for mir::StatementKind<'gcx> {
             mir::StatementKind::Assign(ref place, ref rvalue) => {
                 place.hash_stable(hcx, hasher);
                 rvalue.hash_stable(hcx, hasher);
-            }
-            mir::StatementKind::ReadForMatch(ref place) => {
-                place.hash_stable(hcx, hasher);
             }
             mir::StatementKind::SetDiscriminant { ref place, variant_index } => {
                 place.hash_stable(hcx, hasher);
@@ -363,8 +360,8 @@ for mir::ProjectionElem<'gcx, V, T>
     }
 }
 
-impl_stable_hash_for!(struct mir::SourceScopeData { span, parent_scope });
-impl_stable_hash_for!(struct mir::SourceScopeLocalData {
+impl_stable_hash_for!(struct mir::VisibilityScopeData { span, parent_scope });
+impl_stable_hash_for!(struct mir::VisibilityScopeInfo {
     lint_root, safety
 });
 

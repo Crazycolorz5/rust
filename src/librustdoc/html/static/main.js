@@ -1979,7 +1979,7 @@
         onEach(e.getElementsByClassName('associatedconstant'), func);
     });
 
-    function createToggle(otherMessage, extraClass) {
+    function createToggle(otherMessage) {
         var span = document.createElement('span');
         span.className = 'toggle-label';
         span.style.display = 'none';
@@ -1995,9 +1995,6 @@
 
         var wrapper = document.createElement('div');
         wrapper.className = 'toggle-wrapper';
-        if (extraClass) {
-            wrapper.className += ' ' + extraClass;
-        }
         wrapper.appendChild(mainToggle);
         return wrapper;
     }
@@ -2026,13 +2023,10 @@
         }
         if (e.parentNode.id === "main") {
             var otherMessage;
-            var extraClass;
             if (hasClass(e, "type-decl")) {
                 otherMessage = '&nbsp;Show&nbsp;declaration';
-            } else if (hasClass(e.childNodes[0], "impl-items")) {
-                extraClass = "marg-left";
             }
-            e.parentNode.insertBefore(createToggle(otherMessage, extraClass), e);
+            e.parentNode.insertBefore(createToggle(otherMessage), e);
             if (otherMessage && getCurrentValue('rustdoc-item-declarations') !== "false") {
                 collapseDocs(e.previousSibling.childNodes[0], "toggle");
             }

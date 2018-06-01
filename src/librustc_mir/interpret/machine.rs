@@ -2,12 +2,11 @@
 //! This separation exists to ensure that no fancy miri features like
 //! interpreting common C functions leak into CTFE.
 
-use rustc::mir::interpret::{AllocId, EvalResult, Scalar, Pointer, AccessKind, GlobalId};
+use rustc::mir::interpret::{AllocId, EvalResult, PrimVal, MemoryPointer, AccessKind, GlobalId};
 use super::{EvalContext, Place, ValTy, Memory};
 
 use rustc::mir;
 use rustc::ty::{self, Ty};
-use rustc::ty::layout::Size;
 use syntax::codemap::Span;
 use syntax::ast::Mutability;
 
@@ -54,11 +53,11 @@ pub trait Machine<'mir, 'tcx>: Sized {
     fn try_ptr_op<'a>(
         ecx: &EvalContext<'a, 'mir, 'tcx, Self>,
         bin_op: mir::BinOp,
-        left: Scalar,
+        left: PrimVal,
         left_ty: Ty<'tcx>,
-        right: Scalar,
+        right: PrimVal,
         right_ty: Ty<'tcx>,
-    ) -> EvalResult<'tcx, Option<(Scalar, bool)>>;
+    ) -> EvalResult<'tcx, Option<(PrimVal, bool)>>;
 
     /// Called when trying to mark machine defined `MemoryKinds` as static
     fn mark_static_initialized<'a>(
@@ -92,8 +91,8 @@ pub trait Machine<'mir, 'tcx>: Sized {
 
     fn check_locks<'a>(
         _mem: &Memory<'a, 'mir, 'tcx, Self>,
-        _ptr: Pointer,
-        _size: Size,
+        _ptr: MemoryPointer,
+        _size: u64,
         _access: AccessKind,
     ) -> EvalResult<'tcx> {
         Ok(())

@@ -428,20 +428,9 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
                 let intrinsic = intrinsic.as_ref().map(|s| &s[..]);
 
                 if intrinsic == Some("transmute") {
-                    if let Some(destination_ref) = destination.as_ref() {
-                        let &(ref dest, target) = destination_ref;
-                        self.codegen_transmute(&bx, &args[0], dest);
-                        funclet_br(self, bx, target);
-                    } else {
-                        // If we are trying to transmute to an uninhabited type,
-                        // it is likely there is no allotted destination. In fact,
-                        // transmuting to an uninhabited type is UB, which means
-                        // we can do what we like. Here, we declare that transmuting
-                        // into an uninhabited type is impossible, so anything following
-                        // it must be unreachable.
-                        assert_eq!(bx.cx.layout_of(sig.output()).abi, layout::Abi::Uninhabited);
-                        bx.unreachable();
-                    }
+                    let &(ref dest, target) = destination.as_ref().unwrap();
+                    self.codegen_transmute(&bx, &args[0], dest);
+                    funclet_br(self, bx, target);
                     return;
                 }
 

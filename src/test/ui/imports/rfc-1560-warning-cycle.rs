@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unused)]
+
 pub struct Foo;
 
 mod bar {
@@ -16,7 +18,9 @@ mod bar {
     mod baz {
         use *;
         use bar::*;
-        fn f(_: Foo) {} //~ ERROR `Foo` is ambiguous
+        fn f(_: Foo) {}
+        //~^ ERROR `Foo` is ambiguous
+        //~| WARN hard error in a future release
     }
 }
 

@@ -186,31 +186,12 @@ fn check_main_fn_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 Some(hir_map::NodeItem(it)) => {
                     match it.node {
                         hir::ItemFn(.., ref generics, _) => {
-                            let mut error = false;
                             if !generics.params.is_empty() {
-                                let param_type = if generics.is_lt_parameterized() {
-                                    "lifetime"
-                                } else {
-                                    "type"
-                                };
-                                let msg =
-                                    format!("`main` function is not allowed to have {} parameters",
-                                            param_type);
-                                let label =
-                                    format!("`main` cannot have {} parameters", param_type);
-                                struct_span_err!(tcx.sess, generics.span, E0131, "{}", msg)
-                                    .span_label(generics.span, label)
+                                struct_span_err!(tcx.sess, generics.span, E0131,
+                                         "main function is not allowed to have type parameters")
+                                    .span_label(generics.span,
+                                                "main cannot have type parameters")
                                     .emit();
-                                error = true;
-                            }
-                            if let Some(sp) = generics.where_clause.span() {
-                                struct_span_err!(tcx.sess, sp, E0646,
-                                    "`main` function is not allowed to have a `where` clause")
-                                    .span_label(sp, "`main` cannot have a `where` clause")
-                                    .emit();
-                                error = true;
-                            }
-                            if error {
                                 return;
                             }
                         }
@@ -264,26 +245,14 @@ fn check_start_fn_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             match tcx.hir.find(start_id) {
                 Some(hir_map::NodeItem(it)) => {
                     match it.node {
-                        hir::ItemFn(.., ref generics, _) => {
-                            let mut error = false;
-                            if !generics.params.is_empty() {
-                                struct_span_err!(tcx.sess, generics.span, E0132,
-                                    "start function is not allowed to have type parameters")
-                                    .span_label(generics.span,
-                                                "start function cannot have type parameters")
-                                    .emit();
-                                error = true;
-                            }
-                            if let Some(sp) = generics.where_clause.span() {
-                                struct_span_err!(tcx.sess, sp, E0647,
-                                    "start function is not allowed to have a `where` clause")
-                                    .span_label(sp, "start function cannot have a `where` clause")
-                                    .emit();
-                                error = true;
-                            }
-                            if error {
-                                return;
-                            }
+                        hir::ItemFn(..,ref ps,_)
+                        if !ps.params.is_empty() => {
+                            struct_span_err!(tcx.sess, ps.span, E0132,
+                                "start function is not allowed to have type parameters")
+                                .span_label(ps.span,
+                                            "start function cannot have type parameters")
+                                .emit();
+                            return;
                         }
                         _ => ()
                     }

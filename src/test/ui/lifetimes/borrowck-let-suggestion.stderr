@@ -1,11 +1,10 @@
 error[E0597]: borrowed value does not live long enough
-  --> $DIR/borrowck-let-suggestion.rs:12:17
+  --> $DIR/borrowck-let-suggestion.rs:12:13
    |
-LL |     let mut x = vec![1].iter();
-   |                 ^^^^^^^       - temporary value dropped here while still borrowed
-   |                 |
-   |                 temporary value does not live long enough
-LL |     x.use_mut();
+LL |     let x = vec![1].iter();
+   |             ^^^^^^^       - temporary value dropped here while still borrowed
+   |             |
+   |             temporary value does not live long enough
 LL | }
    | - temporary value needs to live until here
    |

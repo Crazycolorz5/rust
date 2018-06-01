@@ -38,18 +38,22 @@ pub struct JsonEmitter {
     registry: Option<Registry>,
     cm: Lrc<CodeMapper + sync::Send + sync::Sync>,
     pretty: bool,
+    /// Whether "approximate suggestions" are enabled in the config
+    suggestion_applicability: bool,
     ui_testing: bool,
 }
 
 impl JsonEmitter {
     pub fn stderr(registry: Option<Registry>,
                   code_map: Lrc<CodeMap>,
-                  pretty: bool) -> JsonEmitter {
+                  pretty: bool,
+                  suggestion_applicability: bool) -> JsonEmitter {
         JsonEmitter {
             dst: Box::new(io::stderr()),
             registry,
             cm: code_map,
             pretty,
+            suggestion_applicability,
             ui_testing: false,
         }
     }
@@ -57,18 +61,20 @@ impl JsonEmitter {
     pub fn basic(pretty: bool) -> JsonEmitter {
         let file_path_mapping = FilePathMapping::empty();
         JsonEmitter::stderr(None, Lrc::new(CodeMap::new(file_path_mapping)),
-                            pretty)
+                            pretty, false)
     }
 
     pub fn new(dst: Box<Write + Send>,
                registry: Option<Registry>,
                code_map: Lrc<CodeMap>,
-               pretty: bool) -> JsonEmitter {
+               pretty: bool,
+               suggestion_applicability: bool) -> JsonEmitter {
         JsonEmitter {
             dst,
             registry,
             cm: code_map,
             pretty,
+            suggestion_applicability,
             ui_testing: false,
         }
     }
@@ -131,6 +137,7 @@ struct DiagnosticSpan {
     /// that should be sliced in atop this span.
     suggested_replacement: Option<String>,
     /// If the suggestion is approximate
+    #[rustc_serialize_exclude_null]
     suggestion_applicability: Option<Applicability>,
     /// Macro invocations that created the code at this span, if any.
     expansion: Option<Box<DiagnosticSpanMacroExpansion>>,
@@ -294,6 +301,12 @@ impl DiagnosticSpan {
             })
         });
 
+        let suggestion_applicability = if je.suggestion_applicability {
+             suggestion.map(|x| x.1)
+        } else {
+            None
+        };
+
         DiagnosticSpan {
             file_name: start.file.name.to_string(),
             byte_start: span.lo().0 - start.file.start_pos.0,
@@ -305,7 +318,7 @@ impl DiagnosticSpan {
             is_primary,
             text: DiagnosticSpanLine::from_span(span, je),
             suggested_replacement: suggestion.map(|x| x.0.clone()),
-            suggestion_applicability: suggestion.map(|x| x.1),
+            suggestion_applicability,
             expansion: backtrace_step,
             label,
         }

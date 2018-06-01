@@ -2,10 +2,9 @@ use std::{fmt, env};
 
 use mir;
 use ty::{FnSig, Ty, layout};
-use ty::layout::{Size, Align};
 
 use super::{
-    Pointer, Lock, AccessKind
+    MemoryPointer, Lock, AccessKind
 };
 
 use backtrace::Backtrace;
@@ -38,7 +37,7 @@ pub enum EvalErrorKind<'tcx, O> {
     MachineError(String),
     FunctionPointerTyMismatch(FnSig<'tcx>, FnSig<'tcx>),
     NoMirFor(String),
-    UnterminatedCString(Pointer),
+    UnterminatedCString(MemoryPointer),
     DanglingPointerDeref,
     DoubleFree,
     InvalidMemoryAccess,
@@ -46,9 +45,9 @@ pub enum EvalErrorKind<'tcx, O> {
     InvalidBool,
     InvalidDiscriminant,
     PointerOutOfBounds {
-        ptr: Pointer,
+        ptr: MemoryPointer,
         access: bool,
-        allocation_size: Size,
+        allocation_size: u64,
     },
     InvalidNullPointerUsage,
     ReadPointerAsBytes,
@@ -72,30 +71,30 @@ pub enum EvalErrorKind<'tcx, O> {
     TlsOutOfBounds,
     AbiViolation(String),
     AlignmentCheckFailed {
-        required: Align,
-        has: Align,
+        required: u64,
+        has: u64,
     },
     MemoryLockViolation {
-        ptr: Pointer,
+        ptr: MemoryPointer,
         len: u64,
         frame: usize,
         access: AccessKind,
         lock: Lock,
     },
     MemoryAcquireConflict {
-        ptr: Pointer,
+        ptr: MemoryPointer,
         len: u64,
         kind: AccessKind,
         lock: Lock,
     },
     InvalidMemoryLockRelease {
-        ptr: Pointer,
+        ptr: MemoryPointer,
         len: u64,
         frame: usize,
         lock: Lock,
     },
     DeallocatedLockedMemory {
-        ptr: Pointer,
+        ptr: MemoryPointer,
         lock: Lock,
     },
     ValidationFailure(String),
@@ -109,7 +108,7 @@ pub enum EvalErrorKind<'tcx, O> {
     DeallocatedWrongMemoryKind(String, String),
     ReallocateNonBasePtr,
     DeallocateNonBasePtr,
-    IncorrectAllocationInformation(Size, Size, Align, Align),
+    IncorrectAllocationInformation(u64, usize, u64, u64),
     Layout(layout::LayoutError<'tcx>),
     HeapAllocZeroBytes,
     HeapAllocNonPowerOfTwoAlignment(u64),
@@ -270,7 +269,7 @@ impl<'tcx, O: fmt::Debug> fmt::Debug for EvalErrorKind<'tcx, O> {
             PointerOutOfBounds { ptr, access, allocation_size } => {
                 write!(f, "{} at offset {}, outside bounds of allocation {} which has size {}",
                        if access { "memory access" } else { "pointer computed" },
-                       ptr.offset.bytes(), ptr.alloc_id, allocation_size.bytes())
+                       ptr.offset, ptr.alloc_id, allocation_size)
             },
             MemoryLockViolation { ptr, len, frame, access, ref lock } => {
                 write!(f, "{:?} access by frame {} at {:?}, size {}, is in conflict with lock {:?}",
@@ -306,7 +305,7 @@ impl<'tcx, O: fmt::Debug> fmt::Debug for EvalErrorKind<'tcx, O> {
                 write!(f, "tried to interpret an invalid 32-bit value as a char: {}", c),
             AlignmentCheckFailed { required, has } =>
                write!(f, "tried to access memory with alignment {}, but alignment {} is required",
-                      has.abi(), required.abi()),
+                      has, required),
             TypeNotPrimitive(ty) =>
                 write!(f, "expected primitive type, got {}", ty),
             Layout(ref err) =>
@@ -316,7 +315,7 @@ impl<'tcx, O: fmt::Debug> fmt::Debug for EvalErrorKind<'tcx, O> {
             MachineError(ref inner) =>
                 write!(f, "{}", inner),
             IncorrectAllocationInformation(size, size2, align, align2) =>
-                write!(f, "incorrect alloc info: expected size {} and align {}, got size {} and align {}", size.bytes(), align.abi(), size2.bytes(), align2.abi()),
+                write!(f, "incorrect alloc info: expected size {} and align {}, got size {} and align {}", size, align, size2, align2),
             _ => write!(f, "{}", self.description()),
         }
     }

@@ -1239,8 +1239,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
           "print the result of the monomorphization collection pass"),
     mir_opt_level: usize = (1, parse_uint, [TRACKED],
           "set the MIR optimization level (0-3, default: 1)"),
-    mutable_noalias: Option<bool> = (None, parse_opt_bool, [TRACKED],
-          "emit noalias metadata for mutable references (default: yes on LLVM >= 6)"),
+    mutable_noalias: bool = (false, parse_bool, [TRACKED],
+          "emit noalias metadata for mutable references"),
     arg_align_attributes: bool = (false, parse_bool, [TRACKED],
           "emit align metadata for reference arguments"),
     dump_mir: Option<String> = (None, parse_opt_string, [UNTRACKED],
@@ -1290,22 +1290,14 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         useful for profiling / PGO."),
     relro_level: Option<RelroLevel> = (None, parse_relro_level, [TRACKED],
         "choose which RELRO level to use"),
-    disable_ast_check_for_mutation_in_guard: bool = (false, parse_bool, [UNTRACKED],
-        "skip AST-based mutation-in-guard check (mir-borrowck provides more precise check)"),
     nll_subminimal_causes: bool = (false, parse_bool, [UNTRACKED],
         "when tracking region error causes, accept subminimal results for faster execution."),
     nll_facts: bool = (false, parse_bool, [UNTRACKED],
                        "dump facts from NLL analysis into side files"),
     disable_nll_user_type_assert: bool = (false, parse_bool, [UNTRACKED],
         "disable user provided type assertion in NLL"),
-    nll_dont_emit_read_for_match: bool = (false, parse_bool, [UNTRACKED],
-        "in match codegen, do not include ReadForMatch statements (used by mir-borrowck)"),
-    polonius: bool = (false, parse_bool, [UNTRACKED],
-        "enable polonius-based borrow-checker"),
     codegen_time_graph: bool = (false, parse_bool, [UNTRACKED],
         "generate a graphical HTML report of time spent in codegen and LLVM"),
-    trans_time_graph: bool = (false, parse_bool, [UNTRACKED],
-        "generate a graphical HTML report of time spent in trans and LLVM"),
     thinlto: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable ThinLTO when possible"),
     inline_in_all_cgus: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1324,6 +1316,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     dep_info_omit_d_target: bool = (false, parse_bool, [TRACKED],
         "in dep-info output, omit targets for tracking dependencies of the dep-info files \
          themselves"),
+    suggestion_applicability: bool = (false, parse_bool, [UNTRACKED],
+        "include machine-applicability of suggestions in JSON output"),
     unpretty: Option<String> = (None, parse_unpretty, [UNTRACKED],
         "Present the input source, unstable (and less-pretty) variants;
         valid types are any of the types for `--pretty`, as well as:
@@ -1345,8 +1339,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
           "enable the experimental Chalk-based trait solving engine"),
     cross_lang_lto: CrossLangLto = (CrossLangLto::Disabled, parse_cross_lang_lto, [TRACKED],
           "generate build artifacts that are compatible with linker-based LTO."),
-    no_parallel_llvm: bool = (false, parse_bool, [UNTRACKED],
-          "don't run LLVM in parallel (while keeping codegen-units and ThinLTO)"),
 }
 
 pub fn default_lib_output() -> CrateType {
@@ -1799,7 +1791,19 @@ pub fn build_session_options_and_crate_config(
             Some("human") => ErrorOutputType::HumanReadable(color),
             Some("json") => ErrorOutputType::Json(false),
             Some("pretty-json") => ErrorOutputType::Json(true),
-            Some("short") => ErrorOutputType::Short(color),
+            Some("short") => {
+                if nightly_options::is_unstable_enabled(matches) {
+                    ErrorOutputType::Short(color)
+                } else {
+                    early_error(
+                        ErrorOutputType::default(),
+                        &format!(
+                            "the `-Z unstable-options` flag must also be passed to \
+                             enable the short error message option"
+                        ),
+                    );
+                }
+            }
             None => ErrorOutputType::HumanReadable(color),
 
             Some(arg) => early_error(
@@ -2016,15 +2020,27 @@ pub fn build_session_options_and_crate_config(
             }
             OptLevel::Default
         } else {
-            match cg.opt_level.as_ref().map(String::as_ref) {
-                None => OptLevel::No,
-                Some("0") => OptLevel::No,
-                Some("1") => OptLevel::Less,
-                Some("2") => OptLevel::Default,
-                Some("3") => OptLevel::Aggressive,
-                Some("s") => OptLevel::Size,
-                Some("z") => OptLevel::SizeMin,
-                Some(arg) => {
+            match (
+                cg.opt_level.as_ref().map(String::as_ref),
+                nightly_options::is_nightly_build(),
+            ) {
+                (None, _) => OptLevel::No,
+                (Some("0"), _) => OptLevel::No,
+                (Some("1"), _) => OptLevel::Less,
+                (Some("2"), _) => OptLevel::Default,
+                (Some("3"), _) => OptLevel::Aggressive,
+                (Some("s"), true) => OptLevel::Size,
+                (Some("z"), true) => OptLevel::SizeMin,
+                (Some("s"), false) | (Some("z"), false) => {
+                    early_error(
+                        error_format,
+                        &format!(
+                            "the optimizations s or z are only \
+                             accepted on the nightly compiler"
+                        ),
+                    );
+                }
+                (Some(arg), _) => {
                     early_error(
                         error_format,
                         &format!(

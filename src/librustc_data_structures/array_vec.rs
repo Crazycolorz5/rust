@@ -119,12 +119,12 @@ impl<A: Array> ArrayVec<A> {
         // the hole, and the vector length is restored to the new length.
         //
         let len = self.len();
-        let start = match range.start_bound() {
+        let start = match range.start() {
             Included(&n) => n,
             Excluded(&n) => n + 1,
             Unbounded    => 0,
         };
-        let end = match range.end_bound() {
+        let end = match range.end() {
             Included(&n) => n + 1,
             Excluded(&n) => n,
             Unbounded    => len,

@@ -23,6 +23,7 @@ impl<'a> Meh<'a> for u8 {}
 
 fn meh() -> Box<for<'_> Meh<'_>> //~ ERROR invalid lifetime parameter name: `'_`
 //~^ ERROR missing lifetime specifier
+//~^^ ERROR missing lifetime specifier
 {
   Box::new(5u8)
 }

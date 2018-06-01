@@ -40,10 +40,9 @@ impl S {
 // START rustc.main.ElaborateDrops.after.mir
 //    let mut _0: ();
 //    scope 1 {
-//    }
-//    scope 2 {
 //        let _1: ();
 //    }
+//    ...
 //    let mut _2: S;
 //    let mut _3: S;
 //    let mut _4: S;
@@ -53,9 +52,9 @@ impl S {
 // START rustc.test.ElaborateDrops.after.mir
 //    let mut _0: ();
 //    ...
-//    let mut _2: S;
-//    ...
 //    let _1: S;
+//    ...
+//    let mut _2: S;
 //    ...
 //    let mut _3: ();
 //    let mut _4: S;

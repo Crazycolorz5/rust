@@ -588,12 +588,14 @@ impl<Idx: PartialOrd<Idx>> RangeToInclusive<Idx> {
 /// `Bound`s are range endpoints:
 ///
 /// ```
+/// #![feature(collections_range)]
+///
 /// use std::ops::Bound::*;
 /// use std::ops::RangeBounds;
 ///
-/// assert_eq!((..100).start_bound(), Unbounded);
-/// assert_eq!((1..12).start_bound(), Included(&1));
-/// assert_eq!((1..12).end_bound(), Excluded(&12));
+/// assert_eq!((..100).start(), Unbounded);
+/// assert_eq!((1..12).start(), Included(&1));
+/// assert_eq!((1..12).end(), Excluded(&12));
 /// ```
 ///
 /// Using a tuple of `Bound`s as an argument to [`BTreeMap::range`].
@@ -630,7 +632,9 @@ pub enum Bound<T> {
     Unbounded,
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 /// `RangeBounds` is implemented by Rust's built-in range types, produced
 /// by range syntax like `..`, `a..`, `..b` or `c..d`.
 pub trait RangeBounds<T: ?Sized> {
@@ -641,16 +645,17 @@ pub trait RangeBounds<T: ?Sized> {
     /// # Examples
     ///
     /// ```
+    /// #![feature(collections_range)]
+    ///
     /// # fn main() {
     /// use std::ops::Bound::*;
     /// use std::ops::RangeBounds;
     ///
-    /// assert_eq!((..10).start_bound(), Unbounded);
-    /// assert_eq!((3..10).start_bound(), Included(&3));
+    /// assert_eq!((..10).start(), Unbounded);
+    /// assert_eq!((3..10).start(), Included(&3));
     /// # }
     /// ```
-    #[stable(feature = "collections_range", since = "1.28.0")]
-    fn start_bound(&self) -> Bound<&T>;
+    fn start(&self) -> Bound<&T>;
 
     /// End index bound.
     ///
@@ -659,16 +664,17 @@ pub trait RangeBounds<T: ?Sized> {
     /// # Examples
     ///
     /// ```
+    /// #![feature(collections_range)]
+    ///
     /// # fn main() {
     /// use std::ops::Bound::*;
     /// use std::ops::RangeBounds;
     ///
-    /// assert_eq!((3..).end_bound(), Unbounded);
-    /// assert_eq!((3..10).end_bound(), Excluded(&10));
+    /// assert_eq!((3..).end(), Unbounded);
+    /// assert_eq!((3..10).end(), Excluded(&10));
     /// # }
     /// ```
-    #[stable(feature = "collections_range", since = "1.28.0")]
-    fn end_bound(&self) -> Bound<&T>;
+    fn end(&self) -> Bound<&T>;
 
 
     /// Returns `true` if `item` is contained in the range.
@@ -693,13 +699,13 @@ pub trait RangeBounds<T: ?Sized> {
         T: PartialOrd<U>,
         U: ?Sized + PartialOrd<T>,
     {
-        (match self.start_bound() {
+        (match self.start() {
             Included(ref start) => *start <= item,
             Excluded(ref start) => *start < item,
             Unbounded => true,
         })
         &&
-        (match self.end_bound() {
+        (match self.end() {
             Included(ref end) => item <= *end,
             Excluded(ref end) => item < *end,
             Unbounded => true,
@@ -709,69 +715,83 @@ pub trait RangeBounds<T: ?Sized> {
 
 use self::Bound::{Excluded, Included, Unbounded};
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T: ?Sized> RangeBounds<T> for RangeFull {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Unbounded
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Unbounded
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for RangeFrom<T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(&self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Unbounded
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for RangeTo<T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Unbounded
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Excluded(&self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for Range<T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(&self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Excluded(&self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for RangeInclusive<T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(&self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Included(&self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for RangeToInclusive<T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Unbounded
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Included(&self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<T> RangeBounds<T> for (Bound<T>, Bound<T>) {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         match *self {
             (Included(ref start), _) => Included(start),
             (Excluded(ref start), _) => Excluded(start),
@@ -779,7 +799,7 @@ impl<T> RangeBounds<T> for (Bound<T>, Bound<T>) {
         }
     }
 
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         match *self {
             (_, Included(ref end)) => Included(end),
             (_, Excluded(ref end)) => Excluded(end),
@@ -788,63 +808,75 @@ impl<T> RangeBounds<T> for (Bound<T>, Bound<T>) {
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T: ?Sized + 'a> RangeBounds<T> for (Bound<&'a T>, Bound<&'a T>) {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         self.0
     }
 
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         self.1
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T> RangeBounds<T> for RangeFrom<&'a T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Unbounded
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T> RangeBounds<T> for RangeTo<&'a T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Unbounded
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Excluded(self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T> RangeBounds<T> for Range<&'a T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Excluded(self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T> RangeBounds<T> for RangeInclusive<&'a T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Included(self.start)
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Included(self.end)
     }
 }
 
-#[stable(feature = "collections_range", since = "1.28.0")]
+#[unstable(feature = "collections_range",
+           reason = "might be replaced with `Into<_>` and a type containing two `Bound` values",
+           issue = "30877")]
 impl<'a, T> RangeBounds<T> for RangeToInclusive<&'a T> {
-    fn start_bound(&self) -> Bound<&T> {
+    fn start(&self) -> Bound<&T> {
         Unbounded
     }
-    fn end_bound(&self) -> Bound<&T> {
+    fn end(&self) -> Bound<&T> {
         Included(self.end)
     }
 }

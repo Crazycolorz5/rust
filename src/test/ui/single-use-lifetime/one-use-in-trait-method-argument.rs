@@ -11,7 +11,7 @@
 // Test that we DO warn for a lifetime on an impl used only in `&self`
 // in a trait method.
 
-#![deny(single_use_lifetimes)]
+#![deny(single_use_lifetime)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 

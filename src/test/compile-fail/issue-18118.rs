@@ -10,12 +10,9 @@
 
 pub fn main() {
     const z: &'static isize = {
-        //~^ ERROR let bindings in constants are unstable
-        //~| ERROR statements in constants are unstable
+        //~^ ERROR blocks in constants are limited to items and tail expressions
         let p = 3;
-        //~^ ERROR let bindings in constants are unstable
-        //~| ERROR statements in constants are unstable
+        //~^ ERROR blocks in constants are limited to items and tail expressions
         &p //~ ERROR `p` does not live long enough
-        //~^ ERROR let bindings in constants are unstable
     };
 }

@@ -348,9 +348,6 @@ language_item_table! {
     I128ShroFnLangItem,              "i128_shro",               i128_shro_fn;
     U128ShroFnLangItem,              "u128_shro",               u128_shro_fn;
 
-    // Align offset for stride != 1, must not panic.
-    AlignOffsetLangItem,             "align_offset",            align_offset_fn;
-
     TerminationTraitLangItem,        "termination",             termination;
 }
 

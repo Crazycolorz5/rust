@@ -318,7 +318,7 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
         // should think carefully about whether it needs to be cleared
         // or updated in some way.
         let RegionConstraintCollector {
-            var_infos: _,
+            var_infos,
             data,
             lubs,
             glbs,
@@ -338,7 +338,10 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
         // un-unified" state. Note that when we unify `a` and `b`, we
         // also insert `a <= b` and a `b <= a` edges, so the
         // `RegionConstraintData` contains the relationship here.
-        unification_table.reset_unifications(|vid| unify_key::RegionVidKey { min_vid: vid });
+        *unification_table = ut::UnificationTable::new();
+        for vid in var_infos.indices() {
+            unification_table.new_key(unify_key::RegionVidKey { min_vid: vid });
+        }
 
         mem::replace(data, RegionConstraintData::default())
     }

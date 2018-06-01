@@ -9,7 +9,6 @@
 // except according to those terms.
 
 #![feature(label_break_value)]
-#![allow(unused_labels)]
 
 // Simple unlabeled break should yield in an error
 fn unlabeled_break_simple() {

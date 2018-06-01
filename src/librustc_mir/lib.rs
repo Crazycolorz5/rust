@@ -38,9 +38,7 @@ extern crate arena;
 #[macro_use]
 extern crate bitflags;
 #[macro_use] extern crate log;
-extern crate either;
 extern crate graphviz as dot;
-extern crate polonius_engine;
 #[macro_use]
 extern crate rustc;
 #[macro_use] extern crate rustc_data_structures;

@@ -16,8 +16,6 @@ fn main() { #![rustc_error] // rust-lang/rust#49855
     //~^ mutable borrow occurs here
     let z = &x; //~ ERROR cannot borrow
     //~^ immutable borrow occurs here
-    z.use_ref();
-    y.use_mut();
 }
 
 fn foo() {
@@ -29,8 +27,6 @@ fn foo() {
             //~^ immutable borrow occurs here
             let z = &mut x; //~ ERROR cannot borrow
             //~^ mutable borrow occurs here
-            z.use_mut();
-            y.use_ref();
         }
         false => ()
     }
@@ -44,10 +40,5 @@ fn bar() {
         //~^ first mutable borrow occurs here
         let z = &mut x; //~ ERROR cannot borrow
         //~^ second mutable borrow occurs here
-        z.use_mut();
-        y.use_mut();
     };
 }
-
-trait Fake { fn use_mut(&mut self) { } fn use_ref(&self) { }  }
-impl<T> Fake for T { }

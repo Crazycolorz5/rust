@@ -9,9 +9,7 @@
 // except according to those terms.
 
 type Array = [u32; {  let x = 2; 5 }];
-//~^ ERROR let bindings in constants are unstable
-//~| ERROR statements in constants are unstable
-//~| ERROR let bindings in constants are unstable
-//~| ERROR statements in constants are unstable
+//~^ ERROR: blocks in constants are limited to items and tail expressions
+//~^^ ERROR: blocks in constants are limited to items and tail expressions
 
 pub fn main() {}
